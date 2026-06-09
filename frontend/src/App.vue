@@ -1,13 +1,22 @@
 <script lang="ts" setup>
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
-import TerminalInstance from './components/TerminalInstance.vue';
+import TerminalLayout from './components/TerminalLayout.vue';
 import { GetSystemStats } from '../wailsjs/go/main/App';
 import { WriteToTerminal } from '../wailsjs/go/main/TerminalService';
+
+import {
+  PaneNode,
+  createTerminalNode,
+  findNode,
+  removeNode,
+  splitNode,
+  moveNode,
+} from './utils/layout';
 
 interface Tab {
   id: string;
   name: string;
-  sessionId: string;
+  rootNode: PaneNode;
 }
 
 const themes: Record<string, { name: string; cssClass: string; xterm: any }> = {
@@ -106,6 +115,7 @@ const themes: Record<string, { name: string; cssClass: string; xterm: any }> = {
 // Application reactive states
 const tabs = ref<Tab[]>([]);
 const activeTabId = ref<string>('');
+const activePaneId = ref<string>('');
 const currentTheme = ref<string>('glassmorphic');
 const fontSize = ref<number>(14);
 const sidebarOpen = ref<boolean>(true);
@@ -135,33 +145,43 @@ const activeTab = computed(() => {
   return tabs.value.find((t) => t.id === activeTabId.value) || null;
 });
 
+// Traverses layout tree to find the first terminal node (leaf)
+function getFirstTerminalNode(node: PaneNode): PaneNode | null {
+  if (node.type === 'terminal') return node;
+  if (node.type === 'split' && node.children && node.children.length > 0) {
+    return getFirstTerminalNode(node.children[0]);
+  }
+  return null;
+}
+
 // Add a new tab/session
 function addTab() {
   const id = Date.now().toString();
+  const rootPaneId = `pane-${Date.now()}`;
   const index = tabs.value.length + 1;
   const newTab: Tab = {
     id,
     name: `Shell ${index}`,
-    sessionId: '',
+    rootNode: createTerminalNode(rootPaneId, ''),
   };
   tabs.value.push(newTab);
   activeTabId.value = id;
+  activePaneId.value = rootPaneId;
 }
 
 // Select specific tab
 function selectTab(id: string) {
   activeTabId.value = id;
-}
-
-// Handle tab initialization callback
-function handleTabInitialized(tabId: string, sId: string) {
-  const tab = tabs.value.find((t) => t.id === tabId);
+  const tab = tabs.value.find((t) => t.id === id);
   if (tab) {
-    tab.sessionId = sId;
+    const firstTerm = getFirstTerminalNode(tab.rootNode);
+    if (firstTerm) {
+      activePaneId.value = firstTerm.id;
+    }
   }
 }
 
-// Remove/close active tab
+// Close active tab
 function closeTab(id: string) {
   const index = tabs.value.findIndex((t) => t.id === id);
   if (index === -1) return;
@@ -170,20 +190,94 @@ function closeTab(id: string) {
 
   if (activeTabId.value === id) {
     if (tabs.value.length > 0) {
-      // Activate nearest tab
       const nextActiveIndex = Math.min(index, tabs.value.length - 1);
-      activeTabId.value = tabs.value[nextActiveIndex].id;
+      selectTab(tabs.value[nextActiveIndex].id);
     } else {
       activeTabId.value = '';
+      activePaneId.value = '';
     }
   }
 }
 
+// Splits the target pane inside the current tab
+function handleSplitPane(paneId: string, orientation: 'horizontal' | 'vertical') {
+  const tab = activeTab.value;
+  if (!tab) return;
+
+  const newPaneId = `pane-${Date.now()}`;
+  tab.rootNode = splitNode(tab.rootNode, paneId, newPaneId, orientation);
+  activePaneId.value = newPaneId;
+}
+
+// Closes a terminal pane inside the current tab
+function handleClosePane(paneId: string) {
+  const tab = activeTab.value;
+  if (!tab) return;
+
+  // If this is the absolute only pane left, close the entire tab
+  if (tab.rootNode.type === 'terminal' && tab.rootNode.id === paneId) {
+    closeTab(tab.id);
+    return;
+  }
+
+  const updatedRoot = removeNode(tab.rootNode, paneId);
+  if (updatedRoot) {
+    tab.rootNode = updatedRoot;
+    // Set focus to the first terminal we can find
+    const firstTerm = getFirstTerminalNode(updatedRoot);
+    if (firstTerm) {
+      activePaneId.value = firstTerm.id;
+    }
+  }
+}
+
+// Backend terminal PTY initialization callback
+function handlePaneInitialized(paneId: string, sessionId: string) {
+  // Seek across all tabs for safety
+  for (const t of tabs.value) {
+    const found = findNode(t.rootNode, paneId);
+    if (found) {
+      found.node.sessionId = sessionId;
+      break;
+    }
+  }
+}
+
+// Resizes a split node's children ratios
+function handleUpdateSizes(nodeId: string, newSizes: number[]) {
+  const tab = activeTab.value;
+  if (!tab) return;
+  const found = findNode(tab.rootNode, nodeId);
+  if (found) {
+    found.node.sizes = newSizes;
+  }
+}
+
+// Rearrange terminal panes via Drag & Drop
+function handleMovePane(sourceId: string, targetId: string, position: 'left' | 'right' | 'top' | 'bottom' | 'swap') {
+  const tab = activeTab.value;
+  if (!tab) return;
+
+  const updatedRoot = moveNode(tab.rootNode, sourceId, targetId, position);
+  if (updatedRoot) {
+    tab.rootNode = updatedRoot;
+    activePaneId.value = sourceId; // Refocus the dragged pane
+  }
+}
+
+// Seeks the active pane's session ID to route snippet commands
+const activeSessionId = computed(() => {
+  const tab = activeTab.value;
+  if (!tab || !activePaneId.value) return null;
+  const found = findNode(tab.rootNode, activePaneId.value);
+  return found?.node.sessionId || null;
+});
+
 // Run predefined snippet command
 function runSnippet(cmd: string) {
-  const current = activeTab.value;
-  if (current && current.sessionId) {
-    WriteToTerminal(current.sessionId, cmd + '\n').catch((err) => {
+  const sessionId = activeSessionId.value;
+  if (sessionId) {
+    WriteToTerminal(sessionId, cmd + '\n').catch((err) => {
       console.error('Failed to run snippet:', err);
     });
   }
@@ -193,7 +287,6 @@ function runSnippet(cmd: string) {
 function startRenameTab(tab: Tab) {
   editingTabId.value = tab.id;
   editingName.value = tab.name;
-  // Focus input
   setTimeout(() => {
     renameInputRef.value?.focus();
     renameInputRef.value?.select();
@@ -229,7 +322,6 @@ async function fetchStats() {
 onMounted(() => {
   addTab();
   fetchStats();
-  // Poll stats every 2.5 seconds
   statsInterval = window.setInterval(fetchStats, 2500);
 });
 
@@ -331,7 +423,7 @@ onBeforeUnmount(() => {
               :key="s.label"
               class="snippet-btn"
               @click="runSnippet(s.cmd)"
-              :disabled="!activeTab || !activeTab.sessionId"
+              :disabled="!activeSessionId"
               :title="s.cmd"
             >
               <span class="cmd-symbol">$</span>
@@ -408,16 +500,21 @@ onBeforeUnmount(() => {
 
       <!-- Terminal content pane -->
       <div class="terminal-workspace-container">
-        <!-- Render terminal instances using v-show to keep execution state intact in background tabs -->
-        <TerminalInstance
+        <!-- Render recursive split layouts for each tab. v-show keeps running terminals alive. -->
+        <TerminalLayout
           v-for="tab in tabs"
           :key="tab.id"
           v-show="activeTabId === tab.id"
+          :node="tab.rootNode"
+          :active-pane-id="activePaneId"
           :theme="themes[currentTheme].xterm"
-          :fontSize="fontSize"
-          :active="activeTabId === tab.id"
-          @exit="closeTab(tab.id)"
-          @initialized="(sId) => handleTabInitialized(tab.id, sId)"
+          :font-size="fontSize"
+          @split-pane="handleSplitPane"
+          @close-pane="handleClosePane"
+          @pane-initialized="handlePaneInitialized"
+          @focus-pane="(pId) => activePaneId = pId"
+          @move-pane="handleMovePane"
+          @update-sizes="handleUpdateSizes"
         />
 
         <!-- Empty state layout -->
