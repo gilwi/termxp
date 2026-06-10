@@ -113,6 +113,36 @@ const dragOverActive = ref(false);
 const activeDropZone = ref<'left' | 'right' | 'top' | 'bottom' | 'swap' | null>(null);
 const dragCounter = ref(0);
 
+// Context Menu State
+const contextMenuVisible = ref(false);
+const contextMenuX = ref(0);
+const contextMenuY = ref(0);
+
+function showContextMenu(e: MouseEvent) {
+  e.preventDefault();
+  emit('focus-pane', props.node.id);
+
+  contextMenuX.value = e.clientX;
+  contextMenuY.value = e.clientY;
+  contextMenuVisible.value = true;
+
+  // Listen to click events to close the context menu
+  setTimeout(() => {
+    document.addEventListener('click', closeContextMenu);
+    document.addEventListener('contextmenu', handleGlobalContextMenu);
+  }, 10);
+}
+
+function closeContextMenu() {
+  contextMenuVisible.value = false;
+  document.removeEventListener('click', closeContextMenu);
+  document.removeEventListener('contextmenu', handleGlobalContextMenu);
+}
+
+function handleGlobalContextMenu(e: MouseEvent) {
+  closeContextMenu();
+}
+
 function onHeaderDragStart(e: DragEvent) {
   if (props.node.type === 'terminal' && e.dataTransfer) {
     e.dataTransfer.effectAllowed = 'move';
@@ -187,6 +217,7 @@ function onDrop(e: DragEvent, zone: 'left' | 'right' | 'top' | 'bottom' | 'swap'
     v-else
     :class="['terminal-pane', { active: activePaneId === node.id }]"
     @click.capture="emit('focus-pane', node.id)"
+    @contextmenu.prevent="showContextMenu"
     @dragenter="onPaneDragEnter"
     @dragover="onPaneDragOver"
     @dragleave="onPaneDragLeave"
@@ -295,6 +326,26 @@ function onDrop(e: DragEvent, zone: 'left' | 'right' | 'top' | 'bottom' | 'swap'
         <div class="swap-icon">🔄 Swap</div>
       </div>
     </div>
+
+    <!-- Right-Click Context Menu -->
+    <teleport to="body">
+      <div
+        v-if="contextMenuVisible"
+        class="custom-context-menu"
+        :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
+      >
+        <button class="context-menu-item" @click="emit('split-pane', node.id, 'horizontal')">
+          <span class="item-icon">▬</span> Split Horizontally
+        </button>
+        <button class="context-menu-item" @click="emit('split-pane', node.id, 'vertical')">
+          <span class="item-icon">❘</span> Split Vertically
+        </button>
+        <div class="context-menu-divider"></div>
+        <button class="context-menu-item close-item" @click="emit('close-pane', node.id)">
+          <span class="item-icon font-mono">✕</span> Close Pane
+        </button>
+      </div>
+    </teleport>
   </div>
 </template>
 
@@ -512,5 +563,65 @@ function onDrop(e: DragEvent, zone: 'left' | 'right' | 'top' | 'bottom' | 'swap'
   font-weight: 700;
   color: var(--text-main);
   text-shadow: 0 0 8px var(--active-accent-glow);
+}
+
+/* Custom Context Menu Styling */
+.custom-context-menu {
+  position: fixed;
+  z-index: 99999;
+  background: var(--sidebar-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 6px 0;
+  min-width: 180px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4), 0 0 8px var(--active-accent-glow);
+  backdrop-filter: var(--backdrop-blur);
+  -webkit-backdrop-filter: var(--backdrop-blur);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.context-menu-item {
+  background: transparent;
+  border: none;
+  color: var(--text-main);
+  padding: 8px 14px;
+  font-size: 12px;
+  font-weight: 500;
+  text-align: left;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  transition: background 0.15s, color 0.15s;
+  font-family: inherit;
+}
+
+.context-menu-item:hover {
+  background: var(--card-hover);
+  color: var(--active-accent);
+}
+
+.context-menu-item.close-item:hover {
+  background: rgba(244, 63, 94, 0.15);
+  color: #f43f5e;
+}
+
+.item-icon {
+  font-size: 11px;
+  width: 12px;
+  display: inline-block;
+  color: var(--text-muted);
+}
+
+.context-menu-item:hover .item-icon {
+  color: inherit;
+}
+
+.context-menu-divider {
+  height: 1px;
+  background: var(--border-color);
+  margin: 4px 0;
 }
 </style>
