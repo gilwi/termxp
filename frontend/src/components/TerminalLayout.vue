@@ -36,7 +36,7 @@ const containerStyle = computed(() => {
         display: "flex",
         width: "100%",
         height: "100%",
-        flexDirection: (props.node.orientation === "horizontal"
+        flexDirection: (props.node.orientation === "vertical"
             ? "row"
             : "column") as any,
         overflow: "hidden",
@@ -46,12 +46,12 @@ const containerStyle = computed(() => {
 function getChildStyle(index: number) {
     if (props.node.type !== "split" || !props.node.sizes) return {};
     const size = props.node.sizes[index];
-    const isHorizontal = props.node.orientation === "horizontal";
+    const isVertical = props.node.orientation === "vertical";
     return {
         flexGrow: 0,
         flexShrink: 0,
-        width: isHorizontal ? `${size}%` : "100%",
-        height: isHorizontal ? "100%" : `${size}%`,
+        width: isVertical ? `${size}%` : "100%",
+        height: isVertical ? "100%" : `${size}%`,
         position: "relative" as const,
     };
 }
@@ -71,26 +71,26 @@ function startResize(e: MouseEvent, index: number) {
         return;
 
     activeSplitterIndex = index;
-    const isHorizontal = props.node.orientation === "horizontal";
-    startPos = isHorizontal ? e.clientX : e.clientY;
+    const isVertical = props.node.orientation === "vertical";
+    startPos = isVertical ? e.clientX : e.clientY;
 
     startSizeA = props.node.sizes[index];
     startSizeB = props.node.sizes[index + 1];
 
     const rect = layoutContainer.value.getBoundingClientRect();
-    parentSizePx = isHorizontal ? rect.width : rect.height;
+    parentSizePx = isVertical ? rect.width : rect.height;
 
     document.addEventListener("mousemove", onResizeDrag);
     document.addEventListener("mouseup", endResize);
-    document.body.style.cursor = isHorizontal ? "col-resize" : "row-resize";
+    document.body.style.cursor = isVertical ? "col-resize" : "row-resize";
     document.body.style.userSelect = "none";
 }
 
 function onResizeDrag(e: MouseEvent) {
     if (activeSplitterIndex === -1 || !props.node.sizes) return;
 
-    const isHorizontal = props.node.orientation === "horizontal";
-    const currentPos = isHorizontal ? e.clientX : e.clientY;
+    const isVertical = props.node.orientation === "vertical";
+    const currentPos = isVertical ? e.clientX : e.clientY;
     const deltaPx = currentPos - startPos;
     const deltaPercent = (deltaPx / parentSizePx) * 100;
 
@@ -265,30 +265,6 @@ function onDrop(
                 <!-- Split controls -->
                 <button
                     class="pane-btn"
-                    @click="emit('split-pane', node.id, 'horizontal')"
-                    title="Split Horizontally"
-                >
-                    <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        stroke-width="2"
-                    >
-                        <rect
-                            x="3"
-                            y="3"
-                            width="18"
-                            height="18"
-                            rx="2"
-                            ry="2"
-                        ></rect>
-                        <line x1="3" y1="12" x2="21" y2="12"></line>
-                    </svg>
-                </button>
-                <button
-                    class="pane-btn"
                     @click="emit('split-pane', node.id, 'vertical')"
                     title="Split Vertically"
                 >
@@ -309,6 +285,30 @@ function onDrop(
                             ry="2"
                         ></rect>
                         <line x1="12" y1="3" x2="12" y2="21"></line>
+                    </svg>
+                </button>
+                <button
+                    class="pane-btn"
+                    @click="emit('split-pane', node.id, 'horizontal')"
+                    title="Split Horizontally"
+                >
+                    <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <rect
+                            x="3"
+                            y="3"
+                            width="18"
+                            height="18"
+                            rx="2"
+                            ry="2"
+                        ></rect>
+                        <line x1="3" y1="12" x2="21" y2="12"></line>
                     </svg>
                 </button>
                 <!-- Close pane control -->
@@ -400,15 +400,15 @@ function onDrop(
             >
                 <button
                     class="context-menu-item"
-                    @click="emit('split-pane', node.id, 'horizontal')"
-                >
-                    <span class="item-icon">▬</span> Split Horizontally
-                </button>
-                <button
-                    class="context-menu-item"
                     @click="emit('split-pane', node.id, 'vertical')"
                 >
                     <span class="item-icon">❘</span> Split Vertically
+                </button>
+                <button
+                    class="context-menu-item"
+                    @click="emit('split-pane', node.id, 'horizontal')"
+                >
+                    <span class="item-icon">▬</span> Split Horizontally
                 </button>
                 <div class="context-menu-divider"></div>
                 <button
@@ -440,13 +440,13 @@ function onDrop(
     background: var(--active-accent);
 }
 
-.splitter-bar.horizontal {
+.splitter-bar.vertical {
     width: 6px;
     cursor: col-resize;
     height: 100%;
 }
 
-.splitter-bar.vertical {
+.splitter-bar.horizontal {
     height: 6px;
     cursor: row-resize;
     width: 100%;
@@ -459,13 +459,13 @@ function onDrop(
     pointer-events: none;
 }
 
-.splitter-bar.horizontal .splitter-line {
+.splitter-bar.vertical .splitter-line {
     width: 1px;
     height: 100%;
     left: 3px;
 }
 
-.splitter-bar.vertical .splitter-line {
+.splitter-bar.horizontal .splitter-line {
     height: 1px;
     width: 100%;
     top: 3px;
