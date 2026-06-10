@@ -1,16 +1,19 @@
 export interface PaneNode {
   id: string;
-  type: 'terminal' | 'split';
-  orientation?: 'horizontal' | 'vertical';
+  type: "terminal" | "split";
+  orientation?: "horizontal" | "vertical";
   children?: PaneNode[];
   sizes?: number[];
   sessionId?: string;
 }
 
-export function createTerminalNode(id: string, sessionId: string = ''): PaneNode {
+export function createTerminalNode(
+  id: string,
+  sessionId: string = "",
+): PaneNode {
   return {
     id,
-    type: 'terminal',
+    type: "terminal",
     sessionId,
   };
 }
@@ -23,12 +26,12 @@ export function findNode(
   root: PaneNode,
   id: string,
   parent: PaneNode | null = null,
-  index: number = -1
+  index: number = -1,
 ): { parent: PaneNode | null; node: PaneNode; index: number } | null {
   if (root.id === id) {
     return { parent, node: root, index };
   }
-  if (root.type === 'split' && root.children) {
+  if (root.type === "split" && root.children) {
     for (let i = 0; i < root.children.length; i++) {
       const found = findNode(root.children[i], id, root, i);
       if (found) return found;
@@ -70,7 +73,11 @@ export function removeNode(root: PaneNode, id: string): PaneNode | null {
   if (parent.children && parent.children.length === 1) {
     const singleChild = parent.children[0];
     const grandparentInfo = findNode(root, parent.id);
-    if (grandparentInfo && grandparentInfo.parent && grandparentInfo.index !== -1) {
+    if (
+      grandparentInfo &&
+      grandparentInfo.parent &&
+      grandparentInfo.index !== -1
+    ) {
       grandparentInfo.parent.children![grandparentInfo.index] = singleChild;
     } else {
       // Parent was the root node of the tree
@@ -89,22 +96,29 @@ export function splitNode(
   root: PaneNode,
   targetId: string,
   newPaneId: string,
-  orientation: 'horizontal' | 'vertical'
+  orientation: "horizontal" | "vertical",
 ): PaneNode {
   const found = findNode(root, targetId);
   if (!found) return root;
 
   const targetNode = found.node;
-  // Clone current node to put as child
-  const originalCopy = { ...targetNode };
-  const newNode = createTerminalNode(newPaneId, '');
+  const parent = found.parent;
 
-  targetNode.type = 'split';
-  targetNode.orientation = orientation;
-  targetNode.children = [originalCopy, newNode];
-  targetNode.sizes = [50, 50];
-  delete targetNode.sessionId;
+  // Create the split node
+  const splitNode: PaneNode = {
+    id: `split-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    type: "split",
+    orientation: orientation,
+    children: [targetNode, createTerminalNode(newPaneId, "")],
+    sizes: [50, 50],
+  };
 
+  if (!parent) {
+    // Target was root
+    return splitNode;
+  }
+
+  parent.children![found.index] = splitNode;
   return root;
 }
 
@@ -117,7 +131,7 @@ export function moveNode(
   root: PaneNode,
   sourceId: string,
   targetId: string,
-  position: 'left' | 'right' | 'top' | 'bottom' | 'swap'
+  position: "left" | "right" | "top" | "bottom" | "swap",
 ): PaneNode {
   if (sourceId === targetId) return root;
 
@@ -125,7 +139,7 @@ export function moveNode(
   const targetInfo = findNode(root, targetId);
   if (!sourceInfo || !targetInfo) return root;
 
-  if (position === 'swap') {
+  if (position === "swap") {
     // Swap the session ID and keep layout tree shape unchanged
     const tempSession = sourceInfo.node.sessionId;
     sourceInfo.node.sessionId = targetInfo.node.sessionId;
@@ -147,20 +161,27 @@ export function moveNode(
   const targetNode = cleanTargetInfo.node;
   const targetNodeCopy = JSON.parse(JSON.stringify(targetNode));
 
-  const isHorizontal = position === 'left' || position === 'right';
-  const orientation = isHorizontal ? 'horizontal' : 'vertical';
+  const isHorizontal = position === "left" || position === "right";
+  const orientation = isHorizontal ? "horizontal" : "vertical";
 
   const children =
-    position === 'left' || position === 'top'
+    position === "left" || position === "top"
       ? [sourceNodeCopy, targetNodeCopy]
       : [targetNodeCopy, sourceNodeCopy];
 
-  // Convert target node into a split node
-  targetNode.type = 'split';
-  targetNode.orientation = orientation;
-  targetNode.children = children;
-  targetNode.sizes = [50, 50];
-  delete targetNode.sessionId;
+  // Convert target node position into a split node
+  const splitNode: PaneNode = {
+    id: `split-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+    type: "split",
+    orientation: orientation,
+    children: children,
+    sizes: [50, 50],
+  };
 
+  if (!cleanTargetInfo.parent) {
+    return splitNode;
+  }
+
+  cleanTargetInfo.parent.children![cleanTargetInfo.index] = splitNode;
   return newRoot;
 }
