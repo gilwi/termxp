@@ -314,6 +314,23 @@ function cancelRenameTab() {
 
 // System stats poller
 let statsInterval: number | null = null;
+
+// Global Keyboard Shortcuts
+function handleGlobalKeyDown(e: KeyboardEvent) {
+    // Ctrl+T: New Tab
+    if (e.ctrlKey && e.key.toLowerCase() === "t") {
+        e.preventDefault();
+        addTab();
+    }
+    // Ctrl+W: Close Current Tab
+    else if (e.ctrlKey && e.key.toLowerCase() === "w") {
+        if (activeTabId.value) {
+            e.preventDefault();
+            closeTab(activeTabId.value);
+        }
+    }
+}
+
 async function fetchStats() {
     try {
         const data = await GetSystemStats();
@@ -332,12 +349,14 @@ onMounted(() => {
     addTab();
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
+    window.addEventListener("keydown", handleGlobalKeyDown);
 });
 
 onBeforeUnmount(() => {
     if (statsInterval) {
         clearInterval(statsInterval);
     }
+    window.removeEventListener("keydown", handleGlobalKeyDown);
 });
 </script>
 
