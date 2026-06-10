@@ -317,13 +317,13 @@ let statsInterval: number | null = null;
 
 // Global Keyboard Shortcuts
 function handleGlobalKeyDown(e: KeyboardEvent) {
-    // Ctrl+T: New Tab
-    if (e.ctrlKey && e.key.toLowerCase() === "t") {
+    // Ctrl+Shift+T: New Tab
+    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
         e.preventDefault();
         addTab();
     }
-    // Ctrl+W: Close Current Tab
-    else if (e.ctrlKey && e.key.toLowerCase() === "w") {
+    // Ctrl+Shift+W: Close Current Tab
+    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "w") {
         if (activeTabId.value) {
             e.preventDefault();
             closeTab(activeTabId.value);

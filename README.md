@@ -11,8 +11,10 @@
 - **🎨 Dynamic Theming:** Switch instantly between premium themes like *Cyberpunk*, *Dracula*, *Matrix*, and *Monokai*.
 - **📊 Real-Time App Metrics:** Monitor TermXP's own footprint with process-specific CPU usage, human-readable RAM consumption (MB/GB), and application uptime.
 - **⌨️ Power-User Shortcuts:** 
-    - `Ctrl + T`: Open new tab
-    - `Ctrl + W`: Close active tab
+    - `Ctrl + Shift + T`: Open new tab
+    - `Ctrl + Shift + W`: Close active tab
+    - `Ctrl + Shift + C`: Copy selection
+    - `Ctrl + Shift + V`: Paste from clipboard
     - High-performance PTY management powered by `creack/pty`.
 - **🚀 Snippet Library:** Run common commands instantly from a customizable quick-action sidebar.
 

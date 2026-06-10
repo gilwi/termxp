@@ -86,6 +86,7 @@ onMounted(async () => {
 
         if (
             e.ctrlKey &&
+            e.shiftKey &&
             (e.key.toLowerCase() === "t" || e.key.toLowerCase() === "w")
         ) {
             return false; // allow to bubble
