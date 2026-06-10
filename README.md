@@ -1,19 +1,61 @@
-# README
+# 🚀 TermXP
 
-## About
+**TermXP** is a premium, high-performance terminal emulator designed for power users who value both aesthetics and functionality. Built on the cutting-edge **Wails v2** framework, it bridges a high-speed Go backend with a modern, glassmorphic Vue 3 frontend to deliver a terminal experience that feels like the future.
 
-This is the official Wails Vue-TS template.
+![TermXP Preview](build/appicon.png)
 
-You can configure the project by editing `wails.json`. More information about the project settings can be found
-here: https://wails.io/docs/reference/project-config
+## ✨ Features
 
-## Live Development
+- **💎 Stunning Glassmorphism:** A beautiful, semi-transparent UI with customizable blur effects and vibrant accent glows.
+- **⚡ Pro Split-Pane Layout:** Deeply nested recursive split-panes. Organize your workspace with horizontal and vertical splits, drag-and-drop repositioning, and fluid resizing.
+- **🎨 Dynamic Theming:** Switch instantly between premium themes like *Cyberpunk*, *Dracula*, *Matrix*, and *Monokai*.
+- **📊 Real-Time App Metrics:** Monitor TermXP's own footprint with process-specific CPU usage, human-readable RAM consumption (MB/GB), and application uptime.
+- **⌨️ Power-User Shortcuts:** 
+    - `Ctrl + T`: Open new tab
+    - `Ctrl + W`: Close active tab
+    - High-performance PTY management powered by `creack/pty`.
+- **🚀 Snippet Library:** Run common commands instantly from a customizable quick-action sidebar.
 
-To run in live development mode, run `wails dev` in the project directory. This will run a Vite development
-server that will provide very fast hot reload of your frontend changes. If you want to develop in a browser
-and have access to your Go methods, there is also a dev server that runs on http://localhost:34115. Connect
-to this in your browser, and you can call your Go code from devtools.
+## 🛠️ Technical Architecture
 
-## Building
+TermXP is engineered for stability and speed:
 
-To build a redistributable, production mode package, use `wails build`.
+- **Backend (Go):** Handles low-level PTY (Pseudo-Terminal) management, process lifecycle, and system telemetry. It uses Wails events for zero-latency data streaming.
+- **Frontend (Vue 3 + TypeScript):** A reactive, type-safe interface utilizing `@xterm/xterm` for high-fidelity terminal rendering.
+- **IPC:** Seamless bridge between Go and JS/TS using Wails bindings, ensuring high-frequency updates (like terminal output) remain smooth.
+
+## 🚀 Getting Started
+
+### Prerequisites
+
+- **Go:** 1.23+
+- **Node.js:** 18+ (with npm)
+- **Wails CLI:** `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
+
+### Development Mode
+
+Run the app with hot-reloading for both backend and frontend:
+
+```bash
+wails dev
+```
+
+### Production Build
+
+Generate a platform-native redistributable binary:
+
+```bash
+wails build
+```
+
+## 📁 Project Structure
+
+- `/app.go`: Application-level logic and telemetry.
+- `/terminal.go`: PTY session management and I/O bridging.
+- `/frontend/src/`: Vue 3 source code, including the recursive layout engine.
+- `/frontend/src/components/`: Core UI components (TerminalInstance, TerminalLayout).
+- `/frontend/src/utils/layout.ts`: The recursive tree logic for split-pane management.
+
+---
+
+Built with ❤️ for the terminal enthusiasts.
