@@ -55,8 +55,35 @@ onMounted(async () => {
     // 3. Open terminal in DOM container
     term.open(terminalContainer.value);
 
-    // 4. Handle custom keys (allow Ctrl+T, Ctrl+W to bubble up to App.vue)
+    // 4. Handle custom keys (allow Ctrl+T, Ctrl+W to bubble up to App.vue, handles copy/paste)
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+        // Copy: Ctrl+Shift+C
+        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c") {
+            if (e.type === "keydown" && !e.repeat) {
+                const selection = term?.getSelection();
+                if (selection) {
+                    navigator.clipboard.writeText(selection);
+                }
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        }
+
+        // Paste: Ctrl+Shift+V
+        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "v") {
+            if (e.type === "keydown" && !e.repeat) {
+                navigator.clipboard.readText().then((text) => {
+                    if (text && sessionId.value) {
+                        WriteToTerminal(sessionId.value, text);
+                    }
+                });
+            }
+            e.preventDefault();
+            e.stopPropagation();
+            return false;
+        }
+
         if (
             e.ctrlKey &&
             (e.key.toLowerCase() === "t" || e.key.toLowerCase() === "w")
