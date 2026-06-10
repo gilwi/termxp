@@ -127,6 +127,7 @@ const renameInputRef = ref<HTMLInputElement | null>(null);
 const stats = ref({
     cpu: 0,
     memory: 0,
+    memoryRaw: "0 MB",
     uptime: "0m",
 });
 
@@ -319,6 +320,7 @@ async function fetchStats() {
         if (data) {
             stats.value.cpu = Math.round(data.cpu);
             stats.value.memory = Math.round(data.memory);
+            stats.value.memoryRaw = data.memoryRaw;
             stats.value.uptime = data.uptime;
         }
     } catch (err) {
@@ -355,13 +357,13 @@ onBeforeUnmount(() => {
             </div>
 
             <div class="sidebar-content custom-scrollbar">
-                <!-- System Status metrics -->
+                <!-- App Status metrics -->
                 <section class="section">
-                    <h3>System Metrics</h3>
+                    <h3>App Metrics</h3>
                     <div class="metrics-grid">
                         <div class="metric-card">
                             <div class="metric-info">
-                                <span>CPU Load</span>
+                                <span>App CPU</span>
                                 <span class="metric-value"
                                     >{{ stats.cpu }}%</span
                                 >
@@ -376,10 +378,10 @@ onBeforeUnmount(() => {
 
                         <div class="metric-card">
                             <div class="metric-info">
-                                <span>RAM Usage</span>
-                                <span class="metric-value"
-                                    >{{ stats.memory }}%</span
-                                >
+                                <span>App RAM</span>
+                                <span class="metric-value">{{
+                                    stats.memoryRaw
+                                }}</span>
                             </div>
                             <div class="progress-bar-container">
                                 <div

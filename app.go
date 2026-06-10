@@ -7,19 +7,23 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 )
 
 // App struct
 type App struct {
 	ctx          context.Context
-	lastCPUIdle  uint64
 	lastCPUTotal uint64
+	lastProcTime uint64
+	startTime    time.Time
 	mu           sync.Mutex
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
-	return &App{}
+	return &App{
+		startTime: time.Now(),
+	}
 }
 
 // startup is called when the app starts. The context is saved
@@ -28,35 +32,109 @@ func (a *App) startup(ctx context.Context) {
 	a.ctx = ctx
 }
 
-// GetSystemStats fetches real-time CPU, RAM, and Uptime on Linux
+// GetSystemStats fetches real-time CPU, RAM, and Uptime for the current process
 func (a *App) GetSystemStats() (map[string]interface{}, error) {
-	// Read MemInfo
-	memTotal, memAvail, err := readMemInfo()
+	// Read Process RAM (RSS)
+	memRSS, err := readProcessMemory()
+	if err != nil {
+		memRSS = 0
+	}
+	// Convert RSS (KB) to a percentage of total system memory for the bar,
+	// or just return the MB value? The UI expects a percentage for the bar.
+	// Let's get total memory to calculate percentage.
+	memTotal, _, _ := readMemInfo()
 	memPercent := 0.0
-	if err == nil && memTotal > 0 {
-		memPercent = float64(memTotal-memAvail) / float64(memTotal) * 100.0
+	if memTotal > 0 {
+		memPercent = (float64(memRSS) / float64(memTotal)) * 100.0
 	}
 
-	// Read CPU load
-	cpuPercent, err := a.calculateCPULoad()
+	// Read Process CPU load
+	cpuPercent, err := a.calculateProcessCPULoad()
 	if err != nil {
 		cpuPercent = 0.0
 	}
 
-	// Get Uptime
-	uptimeStr := "Unknown"
-	if uptimeData, err := os.ReadFile("/proc/uptime"); err == nil {
-		var uptimeSecs float64
-		if _, err = fmt.Sscanf(string(uptimeData), "%f", &uptimeSecs); err == nil {
-			uptimeStr = formatUptime(uptimeSecs)
-		}
-	}
+	// Get Process Uptime
+	uptimeStr := formatUptime(time.Since(a.startTime).Seconds())
 
 	return map[string]interface{}{
-		"cpu":    cpuPercent,
-		"memory": memPercent,
-		"uptime": uptimeStr,
+		"cpu":       cpuPercent,
+		"memory":    memPercent,
+		"memoryRaw": formatMemory(memRSS),
+		"uptime":    uptimeStr,
 	}, nil
+}
+
+func formatMemory(kb uint64) string {
+	if kb < 1024*1024 {
+		return fmt.Sprintf("%d MB", kb/1024)
+	}
+	return fmt.Sprintf("%.1f GB", float64(kb)/(1024*1024))
+}
+
+func readProcessMemory() (rss uint64, err error) {
+	file, err := os.Open("/proc/self/status")
+	if err != nil {
+		return 0, err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.HasPrefix(line, "VmRSS:") {
+			_, _ = fmt.Sscanf(line, "VmRSS: %d", &rss)
+			return rss, nil
+		}
+	}
+	return 0, fmt.Errorf("VmRSS not found")
+}
+
+func readProcessCPUStats() (procTime uint64, totalTime uint64, err error) {
+	// Get total system time
+	_, totalTime, err = readCPUStats()
+	if err != nil {
+		return 0, 0, err
+	}
+
+	// Get process time (utime + stime)
+	data, err := os.ReadFile("/proc/self/stat")
+	if err != nil {
+		return 0, 0, err
+	}
+	fields := strings.Fields(string(data))
+	if len(fields) < 15 {
+		return 0, 0, fmt.Errorf("invalid proc self stat format")
+	}
+
+	var utime, stime uint64
+	_, _ = fmt.Sscanf(fields[13], "%d", &utime)
+	_, _ = fmt.Sscanf(fields[14], "%d", &stime)
+
+	return utime + stime, totalTime, nil
+}
+
+func (a *App) calculateProcessCPULoad() (float64, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	proc2, total2, err := readProcessCPUStats()
+	if err != nil {
+		return 0, err
+	}
+
+	proc1, total1 := a.lastProcTime, a.lastCPUTotal
+	a.lastProcTime, a.lastCPUTotal = proc2, total2
+
+	if total1 == 0 || total2 <= total1 {
+		return 0, nil
+	}
+
+	totalDiff := float64(total2 - total1)
+	procDiff := float64(proc2 - proc1)
+
+	// CPU percentage relative to total system capacity
+	return (procDiff / totalDiff) * 100.0, nil
 }
 
 func readMemInfo() (total, avail uint64, err error) {
@@ -114,28 +192,6 @@ func readCPUStats() (idle, total uint64, err error) {
 	return 0, 0, fmt.Errorf("invalid proc stat format")
 }
 
-func (a *App) calculateCPULoad() (float64, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	idle2, total2, err := readCPUStats()
-	if err != nil {
-		return 0, err
-	}
-
-	idle1, total1 := a.lastCPUIdle, a.lastCPUTotal
-	a.lastCPUIdle, a.lastCPUTotal = idle2, total2
-
-	if total1 == 0 || total2 == total1 {
-		return 0, nil
-	}
-
-	totalDiff := float64(total2 - total1)
-	idleDiff := float64(idle2 - idle1)
-
-	return (totalDiff - idleDiff) / totalDiff * 100.0, nil
-}
-
 func formatUptime(secs float64) string {
 	days := int(secs) / (24 * 3600)
 	hours := (int(secs) % (24 * 3600)) / 3600
@@ -149,4 +205,3 @@ func formatUptime(secs float64) string {
 	}
 	return fmt.Sprintf("%dm", mins)
 }
-
