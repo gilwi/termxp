@@ -10,6 +10,8 @@ const props = defineProps<{
     theme: any;
     themeClass: string;
     fontSize: number;
+    shellPath: string;
+    broadcastActive: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -29,6 +31,7 @@ const emit = defineEmits<{
         position: "left" | "right" | "top" | "bottom" | "swap",
     ): void;
     (e: "update-sizes", nodeId: string, newSizes: number[]): void;
+    (e: "terminal-data", paneId: string, data: string): void;
 }>();
 
 function childContainsMaximized(child: PaneNode): boolean {
@@ -240,6 +243,8 @@ function onDrop(
                 :theme="theme"
                 :theme-class="themeClass"
                 :font-size="fontSize"
+                :shell-path="shellPath"
+                :broadcast-active="broadcastActive"
                 :style="getChildStyle(index)"
                 @split-pane="(pId, orient) => emit('split-pane', pId, orient)"
                 @close-pane="(pId) => emit('close-pane', pId)"
@@ -252,6 +257,7 @@ function onDrop(
                 @update-sizes="
                     (nodeId, sizes) => emit('update-sizes', nodeId, sizes)
                 "
+                @terminal-data="(pId, data) => emit('terminal-data', pId, data)"
             />
             <!-- Splitter bar indicator -->
             <div
@@ -272,7 +278,7 @@ function onDrop(
     <!-- TERMINAL PANE NODE -->
     <div
         v-else
-        :class="['terminal-pane', { active: activePaneId === node.id }]"
+        :class="['terminal-pane', { active: activePaneId === node.id, 'broadcast-highlight': broadcastActive }]"
         @click.capture="emit('focus-pane', node.id)"
         @contextmenu.prevent="showContextMenu"
         @dragenter="onPaneDragEnter"
@@ -289,6 +295,7 @@ function onDrop(
             <div class="pane-title">
                 <span class="terminal-icon">🐚</span>
                 <span class="title-text font-mono">Shell Session</span>
+                <span v-if="broadcastActive" class="broadcast-badge font-mono">📢 Broadcast</span>
             </div>
             <div class="pane-controls">
                 <!-- Split controls -->
@@ -402,8 +409,10 @@ function onDrop(
                 :theme="theme"
                 :fontSize="fontSize"
                 :active="activePaneId === node.id"
+                :shellPath="shellPath"
                 @exit="emit('close-pane', node.id)"
                 @initialized="(sId) => emit('pane-initialized', node.id, sId)"
+                @data="(data) => emit('terminal-data', node.id, data)"
             />
         </div>
 
@@ -781,5 +790,44 @@ function onDrop(
     height: 1px;
     background: var(--border-color);
     margin: 4px 0;
+}
+
+/* Broadcast Styling */
+.terminal-pane.broadcast-highlight {
+    border-color: #f59e0b; /* Amber/Orange indicator */
+    box-shadow: 0 0 8px rgba(245, 158, 11, 0.4);
+}
+
+.terminal-pane.broadcast-highlight.active {
+    border-color: #ef4444; /* Red/Orange for active pane */
+    box-shadow: 0 0 12px rgba(239, 68, 68, 0.6);
+}
+
+.broadcast-badge {
+    background: rgba(245, 158, 11, 0.15);
+    color: #f59e0b;
+    border: 1px solid rgba(245, 158, 11, 0.3);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 8px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    display: inline-flex;
+    align-items: center;
+    gap: 3px;
+    margin-left: 6px;
+    animation: pulseGlow 1.5s infinite alternate;
+}
+
+@keyframes pulseGlow {
+    from {
+        box-shadow: 0 0 2px rgba(245, 158, 11, 0.2);
+        opacity: 0.8;
+    }
+    to {
+        box-shadow: 0 0 8px rgba(245, 158, 11, 0.5);
+        opacity: 1;
+    }
 }
 </style>

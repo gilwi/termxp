@@ -10,6 +10,6 @@ export function ResizeTerminal(arg1:string,arg2:number,arg3:number):Promise<void
 
 export function SetContext(arg1:context.Context):Promise<void>;
 
-export function StartSession(arg1:number,arg2:number):Promise<string>;
+export function StartSession(arg1:number,arg2:number,arg3:string):Promise<string>;
 
 export function WriteToTerminal(arg1:string,arg2:string):Promise<void>;

@@ -1,10 +1,12 @@
 <script lang="ts" setup>
-import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import TerminalLayout from "./components/TerminalLayout.vue";
 import CustomTitleBar from "./components/CustomTitleBar.vue";
-import { GetSystemStats } from "../wailsjs/go/main/App";
+import SettingsModal from "./components/SettingsModal.vue";
+import { GetSystemStats, GetSettings, SaveSettings } from "../wailsjs/go/main/App";
 import { WriteToTerminal } from "../wailsjs/go/main/TerminalService";
 import { EventsOn, WindowIsMaximised } from "../wailsjs/runtime/runtime";
+import { main } from "../wailsjs/go/models";
 
 import {
     PaneNode,
@@ -122,10 +124,18 @@ const maximizedPaneId = ref<string | null>(null);
 const isMaximised = ref<boolean>(false);
 const currentTheme = ref<string>("glassmorphic");
 const fontSize = ref<number>(14);
-const sidebarOpen = ref<boolean>(true);
+const sidebarOpen = ref<boolean>(false);
 const editingTabId = ref<string | null>(null);
 const editingName = ref<string>("");
 const renameInputRef = ref<HTMLInputElement | null>(null);
+
+// Settings and Broadcasting state
+const isSettingsLoaded = ref(false);
+const settingsModalOpen = ref(false);
+const broadcastActive = ref(false);
+const defaultShell = ref("");
+const sidebarOpenDefault = ref(false);
+const snippetsList = ref<Array<{ label: string; cmd: string }>>([]);
 
 // Stats metrics
 const stats = ref({
@@ -134,16 +144,6 @@ const stats = ref({
     memoryRaw: "0 MB",
     uptime: "0m",
 });
-
-// Command snippets list
-const snippets = [
-    { label: "List Files", cmd: "ls -lah" },
-    { label: "System Info", cmd: "uname -a" },
-    { label: "Disk Space", cmd: "df -h" },
-    { label: "Active Network", cmd: "ss -tulpn" },
-    { label: "CPU Load Check", cmd: "cat /proc/loadavg" },
-    { label: "Who Am I", cmd: "whoami && pwd" },
-];
 
 // Computed active tab object
 const activeTab = computed(() => {
@@ -274,6 +274,7 @@ function handleUpdateSizes(nodeId: string, newSizes: number[]) {
     }
 }
 
+// Toggle Maximize state
 function toggleMaximize(paneId?: string) {
     if (maximizedPaneId.value) {
         maximizedPaneId.value = null;
@@ -301,7 +302,7 @@ function handleMovePane(
     }
 }
 
-// Seeks the active pane's session ID to route snippet commands
+// Seeks the active pane's session ID
 const activeSessionId = computed(() => {
     const tab = activeTab.value;
     if (!tab || !activePaneId.value) return null;
@@ -309,13 +310,48 @@ const activeSessionId = computed(() => {
     return found?.node.sessionId || null;
 });
 
+// Recursively find all terminal session IDs in a node
+function getAllSessionIds(node: PaneNode): string[] {
+    if (node.type === "terminal") {
+        return node.sessionId ? [node.sessionId] : [];
+    }
+    const ids: string[] = [];
+    if (node.children) {
+        for (const child of node.children) {
+            ids.push(...getAllSessionIds(child));
+        }
+    }
+    return ids;
+}
+
+// Handle key inputs and clipboard paste operations from terminal instances
+function handleTerminalData(paneId: string, data: string) {
+    const tab = activeTab.value;
+    if (!tab) return;
+
+    const sourceNode = findNode(tab.rootNode, paneId);
+    if (!sourceNode || !sourceNode.node.sessionId) return;
+
+    if (broadcastActive.value) {
+        // Broadcast to all terminals in the active tab
+        const sessionIds = getAllSessionIds(tab.rootNode);
+        for (const sId of sessionIds) {
+            WriteToTerminal(sId, data).catch((err) => {
+                console.error("Broadcast write failed for session:", sId, err);
+            });
+        }
+    } else {
+        // Write only to the source terminal
+        WriteToTerminal(sourceNode.node.sessionId, data).catch((err) => {
+            console.error("Write failed for session:", sourceNode.node.sessionId, err);
+        });
+    }
+}
+
 // Run predefined snippet command
 function runSnippet(cmd: string) {
-    const sessionId = activeSessionId.value;
-    if (sessionId) {
-        WriteToTerminal(sessionId, cmd + "\n").catch((err) => {
-            console.error("Failed to run snippet:", err);
-        });
+    if (activePaneId.value) {
+        handleTerminalData(activePaneId.value, cmd + "\n");
     }
 }
 
@@ -329,6 +365,7 @@ function startRenameTab(tab: Tab) {
     }, 50);
 }
 
+// Save tab renaming
 function saveRenameTab(tab: Tab) {
     if (editingName.value.trim()) {
         tab.name = editingName.value.trim();
@@ -336,8 +373,50 @@ function saveRenameTab(tab: Tab) {
     editingTabId.value = null;
 }
 
+// Cancel renaming tab
 function cancelRenameTab() {
     editingTabId.value = null;
+}
+
+// Settings management
+async function loadAppSettings() {
+    try {
+        const res = await GetSettings();
+        if (res) {
+            currentTheme.value = res.theme || "glassmorphic";
+            fontSize.value = res.fontSize || 14;
+            defaultShell.value = res.defaultShell || "";
+            sidebarOpenDefault.value = res.sidebarOpenDefault || false;
+            sidebarOpen.value = res.sidebarOpenDefault || false;
+            snippetsList.value = res.snippets || [];
+        }
+    } catch (err) {
+        console.error("Failed to load settings:", err);
+    }
+}
+
+async function saveAppSettings() {
+    try {
+        const payload = main.Settings.createFrom({
+            theme: currentTheme.value,
+            fontSize: fontSize.value,
+            defaultShell: defaultShell.value,
+            sidebarOpenDefault: sidebarOpenDefault.value,
+            snippets: JSON.parse(JSON.stringify(snippetsList.value)),
+        });
+        await SaveSettings(payload);
+    } catch (err) {
+        console.error("Failed to save settings:", err);
+    }
+}
+
+function handleSettingsSave(newSettings: any) {
+    currentTheme.value = newSettings.theme;
+    fontSize.value = newSettings.fontSize;
+    defaultShell.value = newSettings.defaultShell;
+    sidebarOpenDefault.value = newSettings.sidebarOpenDefault;
+    snippetsList.value = newSettings.snippets;
+    saveAppSettings();
 }
 
 // System stats poller
@@ -392,7 +471,12 @@ async function fetchStats() {
     }
 }
 
-onMounted(() => {
+onMounted(async () => {
+    // 1. Load configuration file
+    await loadAppSettings();
+    isSettingsLoaded.value = true;
+
+    // 2. Initialize first session
     addTab();
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
@@ -439,25 +523,10 @@ onBeforeUnmount(() => {
     >
         <CustomTitleBar title="TermXP" />
         <div class="main-content">
-            <!-- Debug info - can be removed after check -->
-            <div
-                v-if="false"
-                style="
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    z-index: 9999;
-                    background: red;
-                    color: white;
-                "
-            >
-                Tabs: {{ tabs.length }} | Active: {{ activeTabId }}
-            </div>
-
             <!-- Background glow design for glassmorphism -->
             <div class="bg-glow"></div>
 
-            <!-- Sidebar Layout -->
+            <!-- Sidebar Layout (Performance Monitor & Quick Actions) -->
             <aside :class="['sidebar', { 'sidebar-closed': !sidebarOpen }]">
                 <div class="sidebar-header">
                     <div class="logo-area">
@@ -470,14 +539,12 @@ onBeforeUnmount(() => {
                 <div class="sidebar-content custom-scrollbar">
                     <!-- App Status metrics -->
                     <section class="section">
-                        <h3>App Metrics</h3>
+                        <h3>System Monitor</h3>
                         <div class="metrics-grid">
                             <div class="metric-card">
                                 <div class="metric-info">
                                     <span>App CPU</span>
-                                    <span class="metric-value"
-                                        >{{ stats.cpu }}%</span
-                                    >
+                                    <span class="metric-value">{{ stats.cpu }}%</span>
                                 </div>
                                 <div class="progress-bar-container">
                                     <div
@@ -490,9 +557,7 @@ onBeforeUnmount(() => {
                             <div class="metric-card">
                                 <div class="metric-info">
                                     <span>App RAM</span>
-                                    <span class="metric-value">{{
-                                        stats.memoryRaw
-                                    }}</span>
+                                    <span class="metric-value">{{ stats.memoryRaw }}</span>
                                 </div>
                                 <div class="progress-bar-container">
                                     <div
@@ -504,83 +569,17 @@ onBeforeUnmount(() => {
 
                             <div class="metric-card single-metric">
                                 <span class="metric-label">Uptime:</span>
-                                <span class="metric-text font-mono">{{
-                                    stats.uptime
-                                }}</span>
+                                <span class="metric-text font-mono">{{ stats.uptime }}</span>
                             </div>
                         </div>
                     </section>
 
-                    <!-- Predefined Themes -->
-                    <section class="section">
-                        <h3>Visual Themes</h3>
-                        <div class="themes-grid">
-                            <button
-                                v-for="(themeConfig, themeKey) in themes"
-                                :key="themeKey"
-                                :class="[
-                                    'theme-btn',
-                                    { active: currentTheme === themeKey },
-                                ]"
-                                @click="currentTheme = themeKey"
-                            >
-                                <span
-                                    class="theme-color-dot"
-                                    :style="{
-                                        background:
-                                            themeConfig.xterm.background,
-                                    }"
-                                ></span>
-                                {{ themeConfig.name }}
-                            </button>
-                        </div>
-                    </section>
-
-                    <!-- FontSize control -->
-                    <section class="section">
-                        <h3>Font Control</h3>
-                        <div class="font-controls">
-                            <button
-                                @click="fontSize = Math.max(10, fontSize - 1)"
-                                class="font-btn"
-                            >
-                                <svg
-                                    width="16"
-                                    height="16"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                >
-                                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                                </svg>
-                            </button>
-                            <span class="font-display">{{ fontSize }}px</span>
-                            <button
-                                @click="fontSize = Math.min(24, fontSize + 1)"
-                                class="font-btn"
-                            >
-                                <svg
-                                    width="16"
-                                    height="16"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    stroke-width="2"
-                                >
-                                    <line x1="12" y1="5" x2="12" y2="19"></line>
-                                    <line x1="5" y1="12" x2="19" y2="12"></line>
-                                </svg>
-                            </button>
-                        </div>
-                    </section>
-
-                    <!-- Quick actions / commands -->
+                    <!-- Predefined/Custom Snippets list -->
                     <section class="section">
                         <h3>Quick Actions</h3>
                         <div class="snippets-list">
                             <button
-                                v-for="s in snippets"
+                                v-for="s in snippetsList"
                                 :key="s.label"
                                 class="snippet-btn"
                                 @click="runSnippet(s.cmd)"
@@ -590,6 +589,9 @@ onBeforeUnmount(() => {
                                 <span class="cmd-symbol">$</span>
                                 <span class="cmd-label">{{ s.label }}</span>
                             </button>
+                            <div v-if="snippetsList.length === 0" style="font-size: 11px; color: var(--text-muted); text-align: center; padding: 12px; border: 1px dashed var(--border-color); border-radius: 6px;">
+                                No actions. Add them in Settings!
+                            </div>
                         </div>
                     </section>
                 </div>
@@ -604,7 +606,7 @@ onBeforeUnmount(() => {
                         <button
                             class="icon-toggle-btn"
                             @click="sidebarOpen = !sidebarOpen"
-                            title="Toggle Sidebar"
+                            title="Toggle Monitor Panel"
                         >
                             <svg
                                 width="18"
@@ -702,10 +704,43 @@ onBeforeUnmount(() => {
                             </button>
                         </div>
                     </div>
+
+                    <!-- Header actions (Settings and Broadcast) -->
+                    <div class="header-actions">
+                        <!-- Broadcast toggle button -->
+                        <button
+                            v-if="tabs.length > 0"
+                            :class="['header-action-btn', 'broadcast-btn', { active: broadcastActive }]"
+                            @click="broadcastActive = !broadcastActive"
+                            :title="broadcastActive ? 'Broadcast Input: ACTIVE' : 'Broadcast Input: OFF'"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <path d="M4.9 19.1C1 15.2 1 8.8 4.9 4.9" />
+                                <path d="M7.8 16.2c-2.3-2.3-2.3-6.1 0-8.5" />
+                                <circle cx="12" cy="12" r="2" />
+                                <path d="M16.2 7.8c2.3 2.3 2.3 6.1 0 8.5" />
+                                <path d="M19.1 4.9C23 8.8 23 15.2 19.1 19.1" />
+                            </svg>
+                            <span>Broadcast</span>
+                        </button>
+
+                        <!-- Settings gear button -->
+                        <button
+                            class="header-action-btn settings-btn"
+                            @click="settingsModalOpen = true"
+                            title="Open Settings"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                                <circle cx="12" cy="12" r="3" />
+                                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                            </svg>
+                            <span>Settings</span>
+                        </button>
+                    </div>
                 </header>
 
                 <!-- Terminal content pane -->
-                <div class="terminal-workspace-container">
+                <div v-if="isSettingsLoaded" class="terminal-workspace-container">
                     <!-- Render recursive split layouts for each tab. v-show keeps running terminals alive. -->
                     <TerminalLayout
                         v-for="tab in tabs"
@@ -717,6 +752,8 @@ onBeforeUnmount(() => {
                         :theme="themes[currentTheme].xterm"
                         :theme-class="themes[currentTheme].cssClass"
                         :font-size="fontSize"
+                        :shell-path="defaultShell"
+                        :broadcast-active="broadcastActive"
                         @split-pane="handleSplitPane"
                         @close-pane="handleClosePane"
                         @pane-initialized="handlePaneInitialized"
@@ -724,6 +761,7 @@ onBeforeUnmount(() => {
                         @toggle-maximize="(pId) => toggleMaximize(pId)"
                         @move-pane="handleMovePane"
                         @update-sizes="handleUpdateSizes"
+                        @terminal-data="handleTerminalData"
                     />
 
                     <!-- Empty state layout -->
@@ -744,6 +782,21 @@ onBeforeUnmount(() => {
                 </div>
             </main>
         </div>
+
+        <!-- Settings Modal Component -->
+        <SettingsModal
+            v-model="settingsModalOpen"
+            :themes="themes"
+            :initial-settings="{
+                theme: currentTheme,
+                fontSize: fontSize,
+                defaultShell: defaultShell,
+                sidebarOpenDefault: sidebarOpenDefault,
+                snippets: snippetsList
+            }"
+            @save="handleSettingsSave"
+            @preview-theme="(t) => currentTheme = t"
+        />
     </div>
 </template>
 
@@ -1088,10 +1141,63 @@ onBeforeUnmount(() => {
 .tabs-scroll-container {
     display: flex;
     align-items: center;
-    width: 100%;
+    flex: 1;
+    min-width: 0;
     height: 100%;
     overflow-x: auto;
     overflow-y: hidden;
+}
+
+.header-actions {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: 12px;
+    flex-shrink: 0;
+}
+
+.header-action-btn {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    border-radius: 6px;
+    height: 32px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-family: inherit;
+}
+
+.header-action-btn:hover {
+    background: var(--card-hover);
+    border-color: var(--active-accent);
+    box-shadow: 0 0 8px var(--active-accent-glow);
+}
+
+.header-action-btn.active.broadcast-btn {
+    background: rgba(239, 68, 68, 0.1);
+    border-color: #ef4444;
+    color: #ef4444;
+    box-shadow: 0 0 10px rgba(239, 68, 68, 0.4);
+    animation: broadcastPulse 2.0s infinite alternate;
+}
+
+.header-action-btn svg {
+    flex-shrink: 0;
+}
+
+@keyframes broadcastPulse {
+    from {
+        box-shadow: 0 0 4px rgba(239, 68, 68, 0.3);
+    }
+    to {
+        box-shadow: 0 0 12px rgba(239, 68, 68, 0.7);
+    }
 }
 
 .icon-toggle-btn {

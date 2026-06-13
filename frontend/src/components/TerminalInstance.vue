@@ -17,11 +17,13 @@ const props = defineProps<{
     theme: any;
     fontSize: number;
     active: boolean;
+    shellPath?: string;
 }>();
 
 const emit = defineEmits<{
     (e: "exit"): void;
     (e: "initialized", sessionId: string): void;
+    (e: "data", data: string): void;
 }>();
 
 const terminalContainer = ref<HTMLDivElement | null>(null);
@@ -74,8 +76,8 @@ onMounted(async () => {
         if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "v") {
             if (e.type === "keydown" && !e.repeat) {
                 navigator.clipboard.readText().then((text) => {
-                    if (text && sessionId.value) {
-                        WriteToTerminal(sessionId.value, text);
+                    if (text) {
+                        emit("data", text);
                     }
                 });
             }
@@ -123,7 +125,7 @@ onMounted(async () => {
 // Initialize Go-side PTY process and bind event streams
 async function initSession(cols: number, rows: number) {
     try {
-        const sId = await StartSession(cols, rows);
+        const sId = await StartSession(cols, rows, props.shellPath || "");
         sessionId.value = sId;
         emit("initialized", sId);
 
@@ -139,13 +141,9 @@ async function initSession(cols: number, rows: number) {
             emit("exit");
         });
 
-        // Send frontend key input to backend
+        // Send frontend key input to parent
         term.onData((data) => {
-            if (sessionId.value) {
-                WriteToTerminal(sessionId.value, data).catch((err) => {
-                    console.error("Failed to write to terminal:", err);
-                });
-            }
+            emit("data", data);
         });
 
         // Focus if currently active

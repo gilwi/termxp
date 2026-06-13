@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 
 	"github.com/creack/pty"
@@ -42,18 +43,29 @@ func (ts *TerminalService) SetContext(ctx context.Context) {
 }
 
 // StartSession spawns a new shell inside a PTY and returns the session ID
-func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
+func (ts *TerminalService) StartSession(cols, rows int, shellPath string) (string, error) {
 	// Generate a unique session ID
 	sessionID := uuid.New().String()
 
-	// Try to find a suitable shell (bash or sh)
-	shellPath := "/bin/bash"
+	// Use custom shell if provided, otherwise find default
+	if shellPath == "" {
+		shellPath = os.Getenv("SHELL")
+		if shellPath == "" {
+			shellPath = "/bin/bash"
+		}
+	}
 	if _, err := os.Stat(shellPath); os.IsNotExist(err) {
 		shellPath = "/bin/sh"
 	}
 
 	// Start command inside PTY
-	cmd := exec.Command(shellPath, "--login")
+	var cmd *exec.Cmd
+	baseName := filepath.Base(shellPath)
+	if baseName == "bash" || baseName == "zsh" || baseName == "sh" || baseName == "ksh" {
+		cmd = exec.Command(shellPath, "--login")
+	} else {
+		cmd = exec.Command(shellPath)
+	}
 	// Set custom environment variables so the terminal behaves like a modern color terminal
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 

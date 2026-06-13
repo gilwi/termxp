@@ -3,8 +3,10 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -205,3 +207,119 @@ func formatUptime(secs float64) string {
 	}
 	return fmt.Sprintf("%dm", mins)
 }
+
+// SnippetConfig defines predefined quick command snippets
+type SnippetConfig struct {
+	Label string `json:"label"`
+	Cmd   string `json:"cmd"`
+}
+
+// Settings defines the user settings struct
+type Settings struct {
+	Theme              string          `json:"theme"`
+	FontSize           int             `json:"fontSize"`
+	DefaultShell       string          `json:"defaultShell"`
+	SidebarOpenDefault bool            `json:"sidebarOpenDefault"`
+	Snippets           []SnippetConfig `json:"snippets"`
+}
+
+// GetSettings loads settings from ~/.config/termxp/config.json
+func (a *App) GetSettings() (Settings, error) {
+	configPath, err := getConfigPath()
+	if err != nil {
+		return getDefaultSettings(), err
+	}
+
+	// Read file
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		// File does not exist, return defaults and save them
+		defaults := getDefaultSettings()
+		_ = a.SaveSettings(defaults)
+		return defaults, nil
+	}
+
+	var settings Settings
+	err = json.Unmarshal(data, &settings)
+	if err != nil {
+		// Corrupted json, return defaults
+		return getDefaultSettings(), nil
+	}
+
+	// Ensure defaults for blank fields
+	if settings.Theme == "" {
+		settings.Theme = "glassmorphic"
+	}
+	if settings.FontSize <= 0 {
+		settings.FontSize = 14
+	}
+	if len(settings.Snippets) == 0 {
+		settings.Snippets = getDefaultSnippets()
+	}
+
+	return settings, nil
+}
+
+// SaveSettings writes settings to ~/.config/termxp/config.json
+func (a *App) SaveSettings(settings Settings) error {
+	configPath, err := getConfigPath()
+	if err != nil {
+		return err
+	}
+
+	// Create directory if not exists
+	dir := filepath.Dir(configPath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
+	}
+
+	data, err := json.MarshalIndent(settings, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal settings: %w", err)
+	}
+
+	err = os.WriteFile(configPath, data, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to write settings file: %w", err)
+	}
+
+	return nil
+}
+
+func getConfigPath() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", fmt.Errorf("failed to get user config dir: %w", err)
+	}
+	return filepath.Join(configDir, "termxp", "config.json"), nil
+}
+
+func getDefaultSettings() Settings {
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "/bin/bash"
+		if _, err := os.Stat(shell); os.IsNotExist(err) {
+			shell = "/bin/sh"
+		}
+	}
+
+	return Settings{
+		Theme:              "glassmorphic",
+		FontSize:           14,
+		DefaultShell:       shell,
+		SidebarOpenDefault: false,
+		Snippets:           getDefaultSnippets(),
+	}
+}
+
+func getDefaultSnippets() []SnippetConfig {
+	return []SnippetConfig{
+		{Label: "List Files", Cmd: "ls -lah"},
+		{Label: "System Info", Cmd: "uname -a"},
+		{Label: "Disk Space", Cmd: "df -h"},
+		{Label: "Active Network", Cmd: "ss -tulpn"},
+		{Label: "CPU Load Check", Cmd: "cat /proc/loadavg"},
+		{Label: "Who Am I", Cmd: "whoami && pwd"},
+	}
+}
+
