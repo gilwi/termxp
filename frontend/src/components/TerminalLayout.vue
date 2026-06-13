@@ -295,7 +295,7 @@ function onDrop(
                 <button
                     class="pane-btn"
                     @click="emit('split-pane', node.id, 'vertical')"
-                    title="Split Vertically"
+                    title="Split Vertically (Ctrl+Shift+E)"
                 >
                     <svg
                         width="14"
@@ -319,7 +319,7 @@ function onDrop(
                 <button
                     class="pane-btn"
                     @click="emit('split-pane', node.id, 'horizontal')"
-                    title="Split Horizontally"
+                    title="Split Horizontally (Ctrl+Shift+O)"
                 >
                     <svg
                         width="14"
@@ -467,12 +467,14 @@ function onDrop(
                     @click="emit('split-pane', node.id, 'vertical')"
                 >
                     <span class="item-icon">❘</span> Split Vertically
+                    (Ctrl+Shift+E)
                 </button>
                 <button
                     class="context-menu-item"
                     @click="emit('split-pane', node.id, 'horizontal')"
                 >
                     <span class="item-icon">▬</span> Split Horizontally
+                    (Ctrl+Shift+O)
                 </button>
                 <button
                     class="context-menu-item"

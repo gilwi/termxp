@@ -362,6 +362,20 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
         e.preventDefault();
         toggleMaximize();
     }
+    // Ctrl+Shift+E: Split Vertically (Right)
+    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
+        if (activePaneId.value) {
+            e.preventDefault();
+            handleSplitPane(activePaneId.value, "vertical");
+        }
+    }
+    // Ctrl+Shift+O: Split Horizontally (Bottom)
+    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
+        if (activePaneId.value) {
+            e.preventDefault();
+            handleSplitPane(activePaneId.value, "horizontal");
+        }
+    }
 }
 
 async function fetchStats() {
