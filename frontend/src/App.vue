@@ -1,8 +1,10 @@
 <script lang="ts" setup>
 import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import TerminalLayout from "./components/TerminalLayout.vue";
+import CustomTitleBar from "./components/CustomTitleBar.vue";
 import { GetSystemStats } from "../wailsjs/go/main/App";
 import { WriteToTerminal } from "../wailsjs/go/main/TerminalService";
+import { EventsOn, WindowIsMaximised } from "../wailsjs/runtime/runtime";
 
 import {
     PaneNode,
@@ -117,6 +119,7 @@ const tabs = ref<Tab[]>([]);
 const activeTabId = ref<string>("");
 const activePaneId = ref<string>("");
 const maximizedPaneId = ref<string | null>(null);
+const isMaximised = ref<boolean>(false);
 const currentTheme = ref<string>("glassmorphic");
 const fontSize = ref<number>(14);
 const sidebarOpen = ref<boolean>(true);
@@ -380,6 +383,28 @@ onMounted(() => {
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
     window.addEventListener("keydown", handleGlobalKeyDown);
+
+    // Listen for window state changes to handle border radius
+    try {
+        if (typeof EventsOn === "function") {
+            EventsOn("wails:window-maximise", () => {
+                isMaximised.value = true;
+            });
+            EventsOn("wails:window-unmaximise", () => {
+                isMaximised.value = false;
+            });
+        }
+
+        if (typeof WindowIsMaximised === "function") {
+            WindowIsMaximised()
+                .then((m) => {
+                    isMaximised.value = m;
+                })
+                .catch(() => {});
+        }
+    } catch (err) {
+        console.warn("Wails runtime not fully available yet:", err);
+    }
 });
 
 onBeforeUnmount(() => {
@@ -391,285 +416,320 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-    <div :class="['app-container', themes[currentTheme].cssClass]">
-        <!-- Background glow design for glassmorphism -->
-        <div class="bg-glow"></div>
-
-        <!-- Sidebar Layout -->
-        <aside :class="['sidebar', { 'sidebar-closed': !sidebarOpen }]">
-            <div class="sidebar-header">
-                <div class="logo-area">
-                    <span class="logo-icon">🚀</span>
-                    <h2>TermXP</h2>
-                    <span class="badge">PRO</span>
-                </div>
+    <div
+        :class="[
+            'app-container',
+            themes[currentTheme].cssClass,
+            { 'is-maximised': isMaximised },
+        ]"
+    >
+        <CustomTitleBar title="TermXP" />
+        <div class="main-content">
+            <!-- Debug info - can be removed after check -->
+            <div
+                v-if="false"
+                style="
+                    position: absolute;
+                    top: 0;
+                    left: 0;
+                    z-index: 9999;
+                    background: red;
+                    color: white;
+                "
+            >
+                Tabs: {{ tabs.length }} | Active: {{ activeTabId }}
             </div>
 
-            <div class="sidebar-content custom-scrollbar">
-                <!-- App Status metrics -->
-                <section class="section">
-                    <h3>App Metrics</h3>
-                    <div class="metrics-grid">
-                        <div class="metric-card">
-                            <div class="metric-info">
-                                <span>App CPU</span>
-                                <span class="metric-value"
-                                    >{{ stats.cpu }}%</span
-                                >
-                            </div>
-                            <div class="progress-bar-container">
-                                <div
-                                    class="progress-bar cpu-bar"
-                                    :style="{ width: stats.cpu + '%' }"
-                                ></div>
-                            </div>
-                        </div>
+            <!-- Background glow design for glassmorphism -->
+            <div class="bg-glow"></div>
 
-                        <div class="metric-card">
-                            <div class="metric-info">
-                                <span>App RAM</span>
-                                <span class="metric-value">{{
-                                    stats.memoryRaw
+            <!-- Sidebar Layout -->
+            <aside :class="['sidebar', { 'sidebar-closed': !sidebarOpen }]">
+                <div class="sidebar-header">
+                    <div class="logo-area">
+                        <span class="logo-icon">🚀</span>
+                        <h2>TermXP</h2>
+                        <span class="badge">PRO</span>
+                    </div>
+                </div>
+
+                <div class="sidebar-content custom-scrollbar">
+                    <!-- App Status metrics -->
+                    <section class="section">
+                        <h3>App Metrics</h3>
+                        <div class="metrics-grid">
+                            <div class="metric-card">
+                                <div class="metric-info">
+                                    <span>App CPU</span>
+                                    <span class="metric-value"
+                                        >{{ stats.cpu }}%</span
+                                    >
+                                </div>
+                                <div class="progress-bar-container">
+                                    <div
+                                        class="progress-bar cpu-bar"
+                                        :style="{ width: stats.cpu + '%' }"
+                                    ></div>
+                                </div>
+                            </div>
+
+                            <div class="metric-card">
+                                <div class="metric-info">
+                                    <span>App RAM</span>
+                                    <span class="metric-value">{{
+                                        stats.memoryRaw
+                                    }}</span>
+                                </div>
+                                <div class="progress-bar-container">
+                                    <div
+                                        class="progress-bar memory-bar"
+                                        :style="{ width: stats.memory + '%' }"
+                                    ></div>
+                                </div>
+                            </div>
+
+                            <div class="metric-card single-metric">
+                                <span class="metric-label">Uptime:</span>
+                                <span class="metric-text font-mono">{{
+                                    stats.uptime
                                 }}</span>
                             </div>
-                            <div class="progress-bar-container">
-                                <div
-                                    class="progress-bar memory-bar"
-                                    :style="{ width: stats.memory + '%' }"
-                                ></div>
-                            </div>
                         </div>
+                    </section>
 
-                        <div class="metric-card single-metric">
-                            <span class="metric-label">Uptime:</span>
-                            <span class="metric-text font-mono">{{
-                                stats.uptime
-                            }}</span>
-                        </div>
-                    </div>
-                </section>
-
-                <!-- Predefined Themes -->
-                <section class="section">
-                    <h3>Visual Themes</h3>
-                    <div class="themes-grid">
-                        <button
-                            v-for="(themeConfig, themeKey) in themes"
-                            :key="themeKey"
-                            :class="[
-                                'theme-btn',
-                                { active: currentTheme === themeKey },
-                            ]"
-                            @click="currentTheme = themeKey"
-                        >
-                            <span
-                                class="theme-color-dot"
-                                :style="{
-                                    background: themeConfig.xterm.background,
-                                }"
-                            ></span>
-                            {{ themeConfig.name }}
-                        </button>
-                    </div>
-                </section>
-
-                <!-- FontSize control -->
-                <section class="section">
-                    <h3>Font Control</h3>
-                    <div class="font-controls">
-                        <button
-                            @click="fontSize = Math.max(10, fontSize - 1)"
-                            class="font-btn"
-                        >
-                            <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                            >
-                                <line x1="5" y1="12" x2="19" y2="12"></line>
-                            </svg>
-                        </button>
-                        <span class="font-display">{{ fontSize }}px</span>
-                        <button
-                            @click="fontSize = Math.min(24, fontSize + 1)"
-                            class="font-btn"
-                        >
-                            <svg
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                            >
-                                <line x1="12" y1="5" x2="12" y2="19"></line>
-                                <line x1="5" y1="12" x2="19" y2="12"></line>
-                            </svg>
-                        </button>
-                    </div>
-                </section>
-
-                <!-- Quick actions / commands -->
-                <section class="section">
-                    <h3>Quick Actions</h3>
-                    <div class="snippets-list">
-                        <button
-                            v-for="s in snippets"
-                            :key="s.label"
-                            class="snippet-btn"
-                            @click="runSnippet(s.cmd)"
-                            :disabled="!activeSessionId"
-                            :title="s.cmd"
-                        >
-                            <span class="cmd-symbol">$</span>
-                            <span class="cmd-label">{{ s.label }}</span>
-                        </button>
-                    </div>
-                </section>
-            </div>
-        </aside>
-
-        <!-- Main Workspace -->
-        <main class="workspace">
-            <!-- Top header bar -->
-            <header class="top-header">
-                <div class="tabs-scroll-container custom-scrollbar">
-                    <!-- Toggle sidebar button -->
-                    <button
-                        class="icon-toggle-btn"
-                        @click="sidebarOpen = !sidebarOpen"
-                        title="Toggle Sidebar"
-                    >
-                        <svg
-                            width="18"
-                            height="18"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            stroke-width="2"
-                        >
-                            <line x1="3" y1="12" x2="21" y2="12"></line>
-                            <line x1="3" y1="6" x2="21" y2="6"></line>
-                            <line x1="3" y1="18" x2="21" y2="18"></line>
-                        </svg>
-                    </button>
-
-                    <!-- Tab list -->
-                    <div class="tabs-list">
-                        <div
-                            v-for="tab in tabs"
-                            :key="tab.id"
-                            :class="[
-                                'tab-item',
-                                { active: activeTabId === tab.id },
-                            ]"
-                            @click="selectTab(tab.id)"
-                        >
-                            <!-- Editing name input -->
-                            <input
-                                v-if="editingTabId === tab.id"
-                                ref="renameInputRef"
-                                type="text"
-                                v-model="editingName"
-                                @blur="saveRenameTab(tab)"
-                                @keydown.enter="saveRenameTab(tab)"
-                                @keydown.esc="cancelRenameTab"
-                                class="tab-rename-input"
-                            />
-                            <!-- Default text label -->
-                            <span
-                                v-else
-                                class="tab-label"
-                                @dblclick="startRenameTab(tab)"
-                                title="Double click to rename"
-                            >
-                                {{ tab.name }}
-                            </span>
-
-                            <!-- Close button -->
+                    <!-- Predefined Themes -->
+                    <section class="section">
+                        <h3>Visual Themes</h3>
+                        <div class="themes-grid">
                             <button
-                                class="tab-close-btn"
-                                @click.stop="closeTab(tab.id)"
+                                v-for="(themeConfig, themeKey) in themes"
+                                :key="themeKey"
+                                :class="[
+                                    'theme-btn',
+                                    { active: currentTheme === themeKey },
+                                ]"
+                                @click="currentTheme = themeKey"
+                            >
+                                <span
+                                    class="theme-color-dot"
+                                    :style="{
+                                        background:
+                                            themeConfig.xterm.background,
+                                    }"
+                                ></span>
+                                {{ themeConfig.name }}
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- FontSize control -->
+                    <section class="section">
+                        <h3>Font Control</h3>
+                        <div class="font-controls">
+                            <button
+                                @click="fontSize = Math.max(10, fontSize - 1)"
+                                class="font-btn"
                             >
                                 <svg
-                                    width="12"
-                                    height="12"
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                >
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                            </button>
+                            <span class="font-display">{{ fontSize }}px</span>
+                            <button
+                                @click="fontSize = Math.min(24, fontSize + 1)"
+                                class="font-btn"
+                            >
+                                <svg
+                                    width="16"
+                                    height="16"
+                                    viewBox="0 0 24 24"
+                                    fill="none"
+                                    stroke="currentColor"
+                                    stroke-width="2"
+                                >
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
+                                </svg>
+                            </button>
+                        </div>
+                    </section>
+
+                    <!-- Quick actions / commands -->
+                    <section class="section">
+                        <h3>Quick Actions</h3>
+                        <div class="snippets-list">
+                            <button
+                                v-for="s in snippets"
+                                :key="s.label"
+                                class="snippet-btn"
+                                @click="runSnippet(s.cmd)"
+                                :disabled="!activeSessionId"
+                                :title="s.cmd"
+                            >
+                                <span class="cmd-symbol">$</span>
+                                <span class="cmd-label">{{ s.label }}</span>
+                            </button>
+                        </div>
+                    </section>
+                </div>
+            </aside>
+
+            <!-- Main Workspace -->
+            <main class="workspace">
+                <!-- Top header bar -->
+                <header class="top-header">
+                    <div class="tabs-scroll-container custom-scrollbar">
+                        <!-- Toggle sidebar button -->
+                        <button
+                            class="icon-toggle-btn"
+                            @click="sidebarOpen = !sidebarOpen"
+                            title="Toggle Sidebar"
+                        >
+                            <svg
+                                width="18"
+                                height="18"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                stroke-width="2"
+                            >
+                                <line x1="3" y1="12" x2="21" y2="12"></line>
+                                <line x1="3" y1="6" x2="21" y2="6"></line>
+                                <line x1="3" y1="18" x2="21" y2="18"></line>
+                            </svg>
+                        </button>
+
+                        <!-- Tab list -->
+                        <div class="tabs-list">
+                            <div
+                                v-for="tab in tabs"
+                                :key="tab.id"
+                                :class="[
+                                    'tab-item',
+                                    { active: activeTabId === tab.id },
+                                ]"
+                                @click="selectTab(tab.id)"
+                            >
+                                <!-- Editing name input -->
+                                <input
+                                    v-if="editingTabId === tab.id"
+                                    ref="renameInputRef"
+                                    type="text"
+                                    v-model="editingName"
+                                    @blur="saveRenameTab(tab)"
+                                    @keydown.enter="saveRenameTab(tab)"
+                                    @keydown.esc="cancelRenameTab"
+                                    class="tab-rename-input"
+                                />
+                                <!-- Default text label -->
+                                <span
+                                    v-else
+                                    class="tab-label"
+                                    @dblclick="startRenameTab(tab)"
+                                    title="Double click to rename"
+                                >
+                                    {{ tab.name }}
+                                </span>
+
+                                <!-- Close button -->
+                                <button
+                                    class="tab-close-btn"
+                                    @click.stop="closeTab(tab.id)"
+                                >
+                                    <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        stroke-width="2.5"
+                                    >
+                                        <line
+                                            x1="18"
+                                            y1="6"
+                                            x2="6"
+                                            y2="18"
+                                        ></line>
+                                        <line
+                                            x1="6"
+                                            y1="6"
+                                            x2="18"
+                                            y2="18"
+                                        ></line>
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <!-- Add Tab Button -->
+                            <button
+                                class="add-tab-btn"
+                                @click="addTab"
+                                title="Open new shell session"
+                            >
+                                <svg
+                                    width="14"
+                                    height="14"
                                     viewBox="0 0 24 24"
                                     fill="none"
                                     stroke="currentColor"
                                     stroke-width="2.5"
                                 >
-                                    <line x1="18" y1="6" x2="6" y2="18"></line>
-                                    <line x1="6" y1="6" x2="18" y2="18"></line>
+                                    <line x1="12" y1="5" x2="12" y2="19"></line>
+                                    <line x1="5" y1="12" x2="19" y2="12"></line>
                                 </svg>
+                                <span>New Shell</span>
                             </button>
                         </div>
+                    </div>
+                </header>
 
-                        <!-- Add Tab Button -->
-                        <button
-                            class="add-tab-btn"
-                            @click="addTab"
-                            title="Open new shell session"
-                        >
-                            <svg
-                                width="14"
-                                height="14"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2.5"
-                            >
-                                <line x1="12" y1="5" x2="12" y2="19"></line>
-                                <line x1="5" y1="12" x2="19" y2="12"></line>
-                            </svg>
-                            <span>New Shell</span>
-                        </button>
+                <!-- Terminal content pane -->
+                <div class="terminal-workspace-container">
+                    <!-- Render recursive split layouts for each tab. v-show keeps running terminals alive. -->
+                    <TerminalLayout
+                        v-for="tab in tabs"
+                        :key="tab.id"
+                        v-show="activeTabId === tab.id"
+                        :node="tab.rootNode"
+                        :active-pane-id="activePaneId"
+                        :maximized-pane-id="maximizedPaneId"
+                        :theme="themes[currentTheme].xterm"
+                        :theme-class="themes[currentTheme].cssClass"
+                        :font-size="fontSize"
+                        @split-pane="handleSplitPane"
+                        @close-pane="handleClosePane"
+                        @pane-initialized="handlePaneInitialized"
+                        @focus-pane="(pId) => (activePaneId = pId)"
+                        @toggle-maximize="(pId) => toggleMaximize(pId)"
+                        @move-pane="handleMovePane"
+                        @update-sizes="handleUpdateSizes"
+                    />
+
+                    <!-- Empty state layout -->
+                    <div v-if="tabs.length === 0" class="empty-state">
+                        <div class="empty-glow"></div>
+                        <div class="empty-info">
+                            <span class="empty-icon">📟</span>
+                            <h1>No Active Shell Sessions</h1>
+                            <p>
+                                Spawns local terminal processes (e.g. bash) on
+                                your host machine to run CLI actions.
+                            </p>
+                            <button @click="addTab" class="action-btn">
+                                <span>Start New Shell</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
-            </header>
-
-            <!-- Terminal content pane -->
-            <div class="terminal-workspace-container">
-                <!-- Render recursive split layouts for each tab. v-show keeps running terminals alive. -->
-                <TerminalLayout
-                    v-for="tab in tabs"
-                    :key="tab.id"
-                    v-show="activeTabId === tab.id"
-                    :node="tab.rootNode"
-                    :active-pane-id="activePaneId"
-                    :maximized-pane-id="maximizedPaneId"
-                    :theme="themes[currentTheme].xterm"
-                    :theme-class="themes[currentTheme].cssClass"
-                    :font-size="fontSize"
-                    @split-pane="handleSplitPane"
-                    @close-pane="handleClosePane"
-                    @pane-initialized="handlePaneInitialized"
-                    @focus-pane="(pId) => (activePaneId = pId)"
-                    @toggle-maximize="(pId) => toggleMaximize(pId)"
-                    @move-pane="handleMovePane"
-                    @update-sizes="handleUpdateSizes"
-                />
-
-                <!-- Empty state layout -->
-                <div v-if="tabs.length === 0" class="empty-state">
-                    <div class="empty-glow"></div>
-                    <div class="empty-info">
-                        <span class="empty-icon">📟</span>
-                        <h1>No Active Shell Sessions</h1>
-                        <p>
-                            Spawns local terminal processes (e.g. bash) on your
-                            host machine to run CLI actions.
-                        </p>
-                        <button @click="addTab" class="action-btn">
-                            <span>Start New Shell</span>
-                        </button>
-                    </div>
-                </div>
-            </div>
-        </main>
+            </main>
+        </div>
     </div>
 </template>
 
@@ -677,6 +737,7 @@ onBeforeUnmount(() => {
 /* Reset and core layout */
 .app-container {
     display: flex;
+    flex-direction: column;
     width: 100vw;
     height: 100vh;
     overflow: hidden;
@@ -686,6 +747,23 @@ onBeforeUnmount(() => {
     transition:
         background var(--transition-speed),
         color var(--transition-speed);
+    border: 1px solid var(--border-color);
+    box-sizing: border-box;
+    border-radius: 12px;
+}
+
+.app-container.is-maximised {
+    border-radius: 0;
+    border: none;
+}
+
+.main-content {
+    display: flex;
+    flex: 1;
+    width: 100%;
+    height: calc(100% - 32px); /* Title bar is 32px */
+    overflow: hidden;
+    position: relative;
 }
 
 .bg-glow {
@@ -975,6 +1053,7 @@ onBeforeUnmount(() => {
 .workspace {
     flex: 1;
     height: 100%;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     overflow: hidden;

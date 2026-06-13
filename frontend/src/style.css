@@ -1,152 +1,172 @@
-@import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import url("https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap");
 
-html, body {
-  margin: 0;
-  padding: 0;
-  width: 100%;
-  height: 100%;
-  overflow: hidden;
-  font-family: 'Outfit', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+html,
+body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family:
+        "Outfit",
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        Roboto,
+        Helvetica,
+        Arial,
+        sans-serif;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    background-color: transparent !important;
 }
 
 #app {
-  width: 100%;
-  height: 100%;
-  display: flex;
+    width: 100vw;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background-color: transparent;
 }
 
 /* --- Theme Variables --- */
 
 :root {
-  --transition-speed: 0.3s;
-  --font-mono: 'JetBrains Mono', 'SFMono-Regular', Consolas, Menlo, Monaco, monospace;
+    --transition-speed: 0.3s;
+    --font-mono:
+        "JetBrains Mono", "SFMono-Regular", Consolas, Menlo, Monaco, monospace;
 }
 
 /* Glassmorphic Theme */
 .theme-glassmorphic {
-  --bg-gradient: linear-gradient(135deg, #0e0a1e 0%, #150f2f 40%, #050209 100%);
-  --sidebar-bg: rgba(21, 15, 47, 0.45);
-  --header-bg: rgba(14, 10, 30, 0.65);
-  --border-color: rgba(255, 255, 255, 0.08);
-  --active-accent: #9333ea;
-  --active-accent-glow: rgba(147, 51, 234, 0.55);
-  --active-accent-hover: #a855f7;
-  --text-main: #f1f5f9;
-  --text-muted: #94a3b8;
-  --card-bg: rgba(255, 255, 255, 0.03);
-  --card-hover: rgba(255, 255, 255, 0.08);
-  --backdrop-blur: blur(25px);
-  
-  --terminal-scrollbar-thumb: rgba(147, 51, 234, 0.3);
-  --terminal-scrollbar-thumb-hover: rgba(147, 51, 234, 0.55);
-  --terminal-scrollbar-track: transparent;
+    --bg-gradient: linear-gradient(
+        135deg,
+        rgba(14, 10, 30, 0.4) 0%,
+        rgba(21, 15, 47, 0.5) 40%,
+        rgba(5, 2, 9, 0.6) 100%
+    );
+    --sidebar-bg: rgba(21, 15, 47, 0.45);
+    --header-bg: rgba(14, 10, 30, 0.65);
+    --border-color: rgba(255, 255, 255, 0.08);
+    --active-accent: #9333ea;
+    --active-accent-glow: rgba(147, 51, 234, 0.55);
+    --active-accent-hover: #a855f7;
+    --text-main: #f1f5f9;
+    --text-muted: #94a3b8;
+    --card-bg: rgba(255, 255, 255, 0.03);
+    --card-hover: rgba(255, 255, 255, 0.08);
+    --backdrop-blur: blur(25px);
+
+    --terminal-scrollbar-thumb: rgba(147, 51, 234, 0.3);
+    --terminal-scrollbar-thumb-hover: rgba(147, 51, 234, 0.55);
+    --terminal-scrollbar-track: transparent;
 }
 
 /* Cyberpunk Neon Theme */
 .theme-cyberpunk {
-  --bg-gradient: linear-gradient(135deg, #040408 0%, #0b0b14 100%);
-  --sidebar-bg: #07070e;
-  --header-bg: #030307;
-  --border-color: #ff007f;
-  --active-accent: #00ffcc;
-  --active-accent-glow: rgba(0, 255, 204, 0.5);
-  --active-accent-hover: #33ffdd;
-  --text-main: #00ffcc;
-  --text-muted: #bc00dd;
-  --card-bg: #0c0b1a;
-  --card-hover: #181530;
-  --backdrop-blur: none;
-  
-  --terminal-scrollbar-thumb: rgba(255, 0, 127, 0.45);
-  --terminal-scrollbar-thumb-hover: rgba(255, 0, 127, 0.7);
-  --terminal-scrollbar-track: #040408;
+    --bg-gradient: linear-gradient(135deg, #040408 0%, #0b0b14 100%);
+    --sidebar-bg: #07070e;
+    --header-bg: #030307;
+    --border-color: #ff007f;
+    --active-accent: #00ffcc;
+    --active-accent-glow: rgba(0, 255, 204, 0.5);
+    --active-accent-hover: #33ffdd;
+    --text-main: #00ffcc;
+    --text-muted: #bc00dd;
+    --card-bg: #0c0b1a;
+    --card-hover: #181530;
+    --backdrop-blur: none;
+
+    --terminal-scrollbar-thumb: rgba(255, 0, 127, 0.45);
+    --terminal-scrollbar-thumb-hover: rgba(255, 0, 127, 0.7);
+    --terminal-scrollbar-track: #040408;
 }
 
 /* Dracula Vampire Theme */
 .theme-dracula {
-  --bg-gradient: linear-gradient(135deg, #1e1f29 0%, #282a36 100%);
-  --sidebar-bg: #1e1f29;
-  --header-bg: #191a21;
-  --border-color: #44475a;
-  --active-accent: #ff79c6;
-  --active-accent-glow: rgba(255, 121, 198, 0.4);
-  --active-accent-hover: #ff92df;
-  --text-main: #f8f8f2;
-  --text-muted: #6272a4;
-  --card-bg: #282a36;
-  --card-hover: #343746;
-  --backdrop-blur: none;
-  
-  --terminal-scrollbar-thumb: rgba(189, 147, 249, 0.4);
-  --terminal-scrollbar-thumb-hover: rgba(189, 147, 249, 0.75);
-  --terminal-scrollbar-track: #1e1f29;
+    --bg-gradient: linear-gradient(135deg, #1e1f29 0%, #282a36 100%);
+    --sidebar-bg: #1e1f29;
+    --header-bg: #191a21;
+    --border-color: #44475a;
+    --active-accent: #ff79c6;
+    --active-accent-glow: rgba(255, 121, 198, 0.4);
+    --active-accent-hover: #ff92df;
+    --text-main: #f8f8f2;
+    --text-muted: #6272a4;
+    --card-bg: #282a36;
+    --card-hover: #343746;
+    --backdrop-blur: none;
+
+    --terminal-scrollbar-thumb: rgba(189, 147, 249, 0.4);
+    --terminal-scrollbar-thumb-hover: rgba(189, 147, 249, 0.75);
+    --terminal-scrollbar-track: #1e1f29;
 }
 
 /* Classic Matrix Theme */
 .theme-matrix {
-  --bg-gradient: linear-gradient(135deg, #000000 0%, #030a03 100%);
-  --sidebar-bg: #000000;
-  --header-bg: #000000;
-  --border-color: #00ff00;
-  --active-accent: #00ff00;
-  --active-accent-glow: rgba(0, 255, 0, 0.65);
-  --active-accent-hover: #33ff33;
-  --text-main: #00ff00;
-  --text-muted: #005500;
-  --card-bg: #000000;
-  --card-hover: #001f00;
-  --backdrop-blur: none;
-  
-  --terminal-scrollbar-thumb: rgba(0, 255, 0, 0.45);
-  --terminal-scrollbar-thumb-hover: rgba(0, 255, 0, 0.85);
-  --terminal-scrollbar-track: #000000;
+    --bg-gradient: linear-gradient(135deg, #000000 0%, #030a03 100%);
+    --sidebar-bg: #000000;
+    --header-bg: #000000;
+    --border-color: #00ff00;
+    --active-accent: #00ff00;
+    --active-accent-glow: rgba(0, 255, 0, 0.65);
+    --active-accent-hover: #33ff33;
+    --text-main: #00ff00;
+    --text-muted: #005500;
+    --card-bg: #000000;
+    --card-hover: #001f00;
+    --backdrop-blur: none;
+
+    --terminal-scrollbar-thumb: rgba(0, 255, 0, 0.45);
+    --terminal-scrollbar-thumb-hover: rgba(0, 255, 0, 0.85);
+    --terminal-scrollbar-track: #000000;
 }
 
 /* Monokai Retro Theme */
 .theme-monokai {
-  --bg-gradient: linear-gradient(135deg, #1b1b1b 0%, #272822 100%);
-  --sidebar-bg: #1e1e1e;
-  --header-bg: #141414;
-  --border-color: #3e3d32;
-  --active-accent: #f92672;
-  --active-accent-glow: rgba(249, 38, 114, 0.45);
-  --active-accent-hover: #fb528d;
-  --text-main: #f8f8f2;
-  --text-muted: #75715e;
-  --card-bg: #272822;
-  --card-hover: #3e3d32;
-  --backdrop-blur: none;
-  
-  --terminal-scrollbar-thumb: rgba(166, 226, 46, 0.45);
-  --terminal-scrollbar-thumb-hover: rgba(166, 226, 46, 0.75);
-  --terminal-scrollbar-track: #1e1e1e;
+    --bg-gradient: linear-gradient(135deg, #1b1b1b 0%, #272822 100%);
+    --sidebar-bg: #1e1e1e;
+    --header-bg: #141414;
+    --border-color: #3e3d32;
+    --active-accent: #f92672;
+    --active-accent-glow: rgba(249, 38, 114, 0.45);
+    --active-accent-hover: #fb528d;
+    --text-main: #f8f8f2;
+    --text-muted: #75715e;
+    --card-bg: #272822;
+    --card-hover: #3e3d32;
+    --backdrop-blur: none;
+
+    --terminal-scrollbar-thumb: rgba(166, 226, 46, 0.45);
+    --terminal-scrollbar-thumb-hover: rgba(166, 226, 46, 0.75);
+    --terminal-scrollbar-track: #1e1e1e;
 }
 
 /* --- Scrollbars design pattern --- */
 
 .custom-scrollbar {
-  scrollbar-color: var(--terminal-scrollbar-thumb) var(--terminal-scrollbar-track);
-  scrollbar-width: thin;
+    scrollbar-color: var(--terminal-scrollbar-thumb)
+        var(--terminal-scrollbar-track);
+    scrollbar-width: thin;
 }
 
 @supports not (scrollbar-color: auto) {
-  .custom-scrollbar::-webkit-scrollbar {
-    width: 6px;
-    height: 6px;
-  }
-  
-  .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: var(--terminal-scrollbar-thumb);
-    border-radius: 3px;
-  }
-  
-  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: var(--terminal-scrollbar-thumb-hover);
-  }
-  
-  .custom-scrollbar::-webkit-scrollbar-track {
-    background: var(--terminal-scrollbar-track);
-  }
+    .custom-scrollbar::-webkit-scrollbar {
+        width: 6px;
+        height: 6px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb {
+        background: var(--terminal-scrollbar-thumb);
+        border-radius: 3px;
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+        background: var(--terminal-scrollbar-thumb-hover);
+    }
+
+    .custom-scrollbar::-webkit-scrollbar-track {
+        background: var(--terminal-scrollbar-track);
+    }
 }
