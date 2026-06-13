@@ -116,6 +116,7 @@ const themes: Record<string, { name: string; cssClass: string; xterm: any }> = {
 const tabs = ref<Tab[]>([]);
 const activeTabId = ref<string>("");
 const activePaneId = ref<string>("");
+const maximizedPaneId = ref<string | null>(null);
 const currentTheme = ref<string>("glassmorphic");
 const fontSize = ref<number>(14);
 const sidebarOpen = ref<boolean>(true);
@@ -187,6 +188,15 @@ function closeTab(id: string) {
     const index = tabs.value.findIndex((t) => t.id === id);
     if (index === -1) return;
 
+    // If maximized pane is inside this tab, reset it
+    const tabToClose = tabs.value[index];
+    if (
+        maximizedPaneId.value &&
+        findNode(tabToClose.rootNode, maximizedPaneId.value)
+    ) {
+        maximizedPaneId.value = null;
+    }
+
     tabs.value.splice(index, 1);
 
     if (activeTabId.value === id) {
@@ -217,6 +227,10 @@ function handleSplitPane(
 function handleClosePane(paneId: string) {
     const tab = activeTab.value;
     if (!tab) return;
+
+    if (maximizedPaneId.value === paneId) {
+        maximizedPaneId.value = null;
+    }
 
     // If this is the absolute only pane left, close the entire tab
     if (tab.rootNode.type === "terminal" && tab.rootNode.id === paneId) {
@@ -254,6 +268,17 @@ function handleUpdateSizes(nodeId: string, newSizes: number[]) {
     const found = findNode(tab.rootNode, nodeId);
     if (found) {
         found.node.sizes = newSizes;
+    }
+}
+
+function toggleMaximize(paneId?: string) {
+    if (maximizedPaneId.value) {
+        maximizedPaneId.value = null;
+    } else {
+        const targetId = paneId || activePaneId.value;
+        if (targetId) {
+            maximizedPaneId.value = targetId;
+        }
     }
 }
 
@@ -328,6 +353,11 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
             e.preventDefault();
             closeTab(activeTabId.value);
         }
+    }
+    // Ctrl+Shift+X: Toggle Maximize Pane
+    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "x") {
+        e.preventDefault();
+        toggleMaximize();
     }
 }
 
@@ -610,6 +640,7 @@ onBeforeUnmount(() => {
                     v-show="activeTabId === tab.id"
                     :node="tab.rootNode"
                     :active-pane-id="activePaneId"
+                    :maximized-pane-id="maximizedPaneId"
                     :theme="themes[currentTheme].xterm"
                     :theme-class="themes[currentTheme].cssClass"
                     :font-size="fontSize"
@@ -617,6 +648,7 @@ onBeforeUnmount(() => {
                     @close-pane="handleClosePane"
                     @pane-initialized="handlePaneInitialized"
                     @focus-pane="(pId) => (activePaneId = pId)"
+                    @toggle-maximize="(pId) => toggleMaximize(pId)"
                     @move-pane="handleMovePane"
                     @update-sizes="handleUpdateSizes"
                 />

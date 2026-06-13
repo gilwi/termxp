@@ -1,11 +1,12 @@
 <script lang="ts" setup>
 import { ref, computed } from "vue";
 import TerminalInstance from "./TerminalInstance.vue";
-import { PaneNode } from "../utils/layout";
+import { PaneNode, findNode } from "../utils/layout";
 
 const props = defineProps<{
     node: PaneNode;
     activePaneId: string;
+    maximizedPaneId: string | null;
     theme: any;
     themeClass: string;
     fontSize: number;
@@ -20,6 +21,7 @@ const emit = defineEmits<{
     (e: "close-pane", paneId: string): void;
     (e: "pane-initialized", paneId: string, sessionId: string): void;
     (e: "focus-pane", paneId: string): void;
+    (e: "toggle-maximize", paneId: string): void;
     (
         e: "move-pane",
         sourceId: string,
@@ -28,6 +30,11 @@ const emit = defineEmits<{
     ): void;
     (e: "update-sizes", nodeId: string, newSizes: number[]): void;
 }>();
+
+function childContainsMaximized(child: PaneNode): boolean {
+    if (!props.maximizedPaneId) return false;
+    return findNode(child, props.maximizedPaneId) !== null;
+}
 
 // Flex style computed for split children
 const containerStyle = computed(() => {
@@ -45,6 +52,21 @@ const containerStyle = computed(() => {
 
 function getChildStyle(index: number) {
     if (props.node.type !== "split" || !props.node.sizes) return {};
+
+    if (props.maximizedPaneId) {
+        const child = props.node.children![index];
+        if (childContainsMaximized(child)) {
+            return {
+                flexGrow: 1,
+                width: "100%",
+                height: "100%",
+                position: "relative" as const,
+            };
+        } else {
+            return { display: "none" };
+        }
+    }
+
     const size = props.node.sizes[index];
     const isVertical = props.node.orientation === "vertical";
     return {
@@ -211,8 +233,10 @@ function onDrop(
     >
         <template v-for="(child, index) in node.children" :key="child.id">
             <TerminalLayout
+                v-show="!maximizedPaneId || childContainsMaximized(child)"
                 :node="child"
                 :active-pane-id="activePaneId"
+                :maximized-pane-id="maximizedPaneId"
                 :theme="theme"
                 :theme-class="themeClass"
                 :font-size="fontSize"
@@ -223,6 +247,7 @@ function onDrop(
                     (pId, sId) => emit('pane-initialized', pId, sId)
                 "
                 @focus-pane="(pId) => emit('focus-pane', pId)"
+                @toggle-maximize="(pId) => emit('toggle-maximize', pId)"
                 @move-pane="(src, tgt, pos) => emit('move-pane', src, tgt, pos)"
                 @update-sizes="
                     (nodeId, sizes) => emit('update-sizes', nodeId, sizes)
@@ -230,7 +255,11 @@ function onDrop(
             />
             <!-- Splitter bar indicator -->
             <div
-                v-if="node.children && index < node.children.length - 1"
+                v-if="
+                    !maximizedPaneId &&
+                    node.children &&
+                    index < node.children.length - 1
+                "
                 class="splitter-bar"
                 :class="node.orientation"
                 @mousedown="startResize($event, index)"
@@ -309,6 +338,41 @@ function onDrop(
                             ry="2"
                         ></rect>
                         <line x1="3" y1="12" x2="21" y2="12"></line>
+                    </svg>
+                </button>
+                <!-- Maximize/Restore control -->
+                <button
+                    class="pane-btn"
+                    @click="emit('toggle-maximize', node.id)"
+                    :title="
+                        maximizedPaneId === node.id
+                            ? 'Restore Pane'
+                            : 'Maximize Pane'
+                    "
+                >
+                    <svg
+                        v-if="maximizedPaneId === node.id"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path
+                            d="M8 3v3a2 2 0 0 1-2 2H3m18 0h-3a2 2 0 0 1-2-2V3m0 18v-3a2 2 0 0 1 2-2h3M3 16h3a2 2 0 0 1 2 2v3"
+                        ></path>
+                    </svg>
+                    <svg
+                        v-else
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        stroke-width="2"
+                    >
+                        <path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"></path>
                     </svg>
                 </button>
                 <!-- Close pane control -->
@@ -409,6 +473,19 @@ function onDrop(
                     @click="emit('split-pane', node.id, 'horizontal')"
                 >
                     <span class="item-icon">▬</span> Split Horizontally
+                </button>
+                <button
+                    class="context-menu-item"
+                    @click="emit('toggle-maximize', node.id)"
+                >
+                    <span class="item-icon">{{
+                        maximizedPaneId === node.id ? "❐" : "⛶"
+                    }}</span>
+                    {{
+                        maximizedPaneId === node.id
+                            ? "Restore Pane"
+                            : "Maximize Pane"
+                    }}
                 </button>
                 <div class="context-menu-divider"></div>
                 <button
