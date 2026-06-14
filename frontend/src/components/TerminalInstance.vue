@@ -39,7 +39,7 @@ onMounted(async () => {
     term = new Terminal({
         fontSize: props.fontSize,
         fontFamily:
-            'SFMono-Regular, Consolas, Menlo, Monaco, "Liberation Mono", "Courier New", monospace',
+            '"Anka/Coder", SFMono-Regular, Consolas, Menlo, Monaco, monospace',
         theme: props.theme,
         cursorBlink: true,
         cursorStyle: "block",

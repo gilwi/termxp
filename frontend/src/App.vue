@@ -781,6 +781,7 @@ onBeforeUnmount(() => {
 }
 
 .bg-glow {
+    pointer-events: none;
     position: absolute;
     top: -20%;
     left: -20%;
