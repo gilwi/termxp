@@ -6,11 +6,12 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
-	"github.com/wailsapp/wails/v2/pkg/runtime"
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // TerminalSession represents an active shell process running in a PTY
@@ -41,19 +42,36 @@ func (ts *TerminalService) SetContext(ctx context.Context) {
 	ts.ctx = ctx
 }
 
+// resolveShell returns the command and arguments to launch a shell.
+// On Windows it prefers WSL if available, otherwise falls back to cmd.exe.
+// On Unix it picks bash or sh.
+func resolveShell() (string, []string) {
+	if runtime.GOOS == "windows" {
+		if wslPath, err := exec.LookPath("wsl.exe"); err == nil {
+			return wslPath, []string{}
+		}
+		// Fallback: plain cmd.exe
+		return "cmd.exe", []string{}
+	}
+
+	// Unix path
+	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
+		if _, err := os.Stat(sh); err == nil {
+			return sh, []string{"--login"}
+		}
+	}
+	return "/bin/sh", []string{"--login"}
+}
+
 // StartSession spawns a new shell inside a PTY and returns the session ID
 func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
 	// Generate a unique session ID
 	sessionID := uuid.New().String()
 
-	// Try to find a suitable shell (bash or sh)
-	shellPath := "/bin/bash"
-	if _, err := os.Stat(shellPath); os.IsNotExist(err) {
-		shellPath = "/bin/sh"
-	}
+	shellPath, shellArgs := resolveShell()
 
 	// Start command inside PTY
-	cmd := exec.Command(shellPath, "--login")
+	cmd := exec.Command(shellPath, shellArgs...)
 	// Set custom environment variables so the terminal behaves like a modern color terminal
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
@@ -102,7 +120,7 @@ func (ts *TerminalService) readLoop(s *TerminalSession) {
 
 		if n > 0 {
 			// Send output to frontend
-			runtime.EventsEmit(ts.ctx, "terminal:data:"+s.ID, string(buf[:n]))
+			wailsRuntime.EventsEmit(ts.ctx, "terminal:data:"+s.ID, string(buf[:n]))
 		}
 	}
 
@@ -112,7 +130,7 @@ func (ts *TerminalService) readLoop(s *TerminalSession) {
 	ts.mu.Unlock()
 
 	if !isClosed {
-		runtime.EventsEmit(ts.ctx, "terminal:exit:"+s.ID, nil)
+		wailsRuntime.EventsEmit(ts.ctx, "terminal:exit:"+s.ID, nil)
 		ts.KillSession(s.ID)
 	}
 }
