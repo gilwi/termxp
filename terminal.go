@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 	"github.com/google/uuid"
@@ -88,23 +89,82 @@ func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
 	return sessionID, nil
 }
 
-// readLoop reads output from the PTY and emits events to the frontend
+// readLoop reads output from the PTY and emits coalesced events to the frontend.
+// Instead of emitting one event per read, it batches bytes and flushes at most
+// once per frame (or sooner if the buffer grows large), which dramatically
+// reduces IPC/serialization overhead during bursty output.
 func (ts *TerminalService) readLoop(s *TerminalSession) {
 	buf := make([]byte, 32*1024)
+
+	const (
+		flushInterval = 12 * time.Millisecond // ~one frame; keeps latency invisible
+		maxPending    = 64 * 1024             // force a flush before buffering grows unbounded
+	)
+
+	var (
+		mu        sync.Mutex
+		pending   []byte
+		flushChan = make(chan struct{}, 1) // size-triggered flush nudge
+		done      = make(chan struct{})    // signals reader has stopped
+	)
+
+	// flush emits whatever is currently buffered as a single event.
+	flush := func() {
+		mu.Lock()
+		if len(pending) == 0 {
+			mu.Unlock()
+			return
+		}
+		data := pending
+		pending = nil
+		mu.Unlock()
+		runtime.EventsEmit(ts.ctx, "terminal:data:"+s.ID, string(data))
+	}
+
+	// Flusher goroutine: time-based + size-triggered flushing.
+	ticker := time.NewTicker(flushInterval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				flush()
+			case <-flushChan:
+				flush()
+			case <-done:
+				flush() // final flush so trailing bytes aren't lost
+				return
+			}
+		}
+	}()
+
+	// Reader loop.
 	for {
 		n, err := s.ptyFile.Read(buf)
+		if n > 0 {
+			mu.Lock()
+			pending = append(pending, buf[:n]...)
+			tooBig := len(pending) >= maxPending
+			mu.Unlock()
+
+			if tooBig {
+				// Non-blocking nudge; if a flush is already queued, skip.
+				select {
+				case flushChan <- struct{}{}:
+				default:
+				}
+			}
+		}
 		if err != nil {
 			if err == io.EOF {
 				// Normal termination
 			}
 			break
 		}
-
-		if n > 0 {
-			// Send output to frontend
-			runtime.EventsEmit(ts.ctx, "terminal:data:"+s.ID, string(buf[:n]))
-		}
 	}
+
+	// Stop the flusher and perform the final flush before emitting exit.
+	close(done)
 
 	// Clean up and emit exit event
 	ts.mu.Lock()
