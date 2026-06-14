@@ -13,14 +13,14 @@ defineProps<{
 <template>
     <header class="custom-title-bar">
         <!-- This div captures mouse events and tells Wails to drag the window -->
-        <div class="drag-region" style="--wails-drag-zone: drag"></div>
+        <div class="drag-region" style="--wails-draggable: drag"></div>
 
         <div class="title-section">
             <span class="app-icon">🚀</span>
             <span class="app-title font-mono">{{ title }}</span>
         </div>
 
-        <div class="window-controls" style="--wails-drag-zone: no-drag">
+        <div class="window-controls" style="--wails-draggable: no-drag">
             <button
                 class="control-btn minimize"
                 @click="WindowMinimise"
