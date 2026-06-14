@@ -4,11 +4,17 @@ import {context} from '../models';
 
 export function CleanupAllSessions():Promise<void>;
 
+export function GetWSLDistro():Promise<string>;
+
 export function KillSession(arg1:string):Promise<void>;
+
+export function ListWSLDistros():Promise<Array<string>>;
 
 export function ResizeTerminal(arg1:string,arg2:number,arg3:number):Promise<void>;
 
 export function SetContext(arg1:context.Context):Promise<void>;
+
+export function SetWSLDistro(arg1:string):Promise<void>;
 
 export function StartSession(arg1:number,arg2:number):Promise<string>;
 

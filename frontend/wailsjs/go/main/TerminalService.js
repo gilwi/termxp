@@ -6,8 +6,16 @@ export function CleanupAllSessions() {
   return window['go']['main']['TerminalService']['CleanupAllSessions']();
 }
 
+export function GetWSLDistro() {
+  return window['go']['main']['TerminalService']['GetWSLDistro']();
+}
+
 export function KillSession(arg1) {
   return window['go']['main']['TerminalService']['KillSession'](arg1);
+}
+
+export function ListWSLDistros() {
+  return window['go']['main']['TerminalService']['ListWSLDistros']();
 }
 
 export function ResizeTerminal(arg1, arg2, arg3) {
@@ -16,6 +24,10 @@ export function ResizeTerminal(arg1, arg2, arg3) {
 
 export function SetContext(arg1) {
   return window['go']['main']['TerminalService']['SetContext'](arg1);
+}
+
+export function SetWSLDistro(arg1) {
+  return window['go']['main']['TerminalService']['SetWSLDistro'](arg1);
 }
 
 export function StartSession(arg1, arg2) {

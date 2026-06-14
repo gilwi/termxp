@@ -1,12 +1,16 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 
 	"github.com/creack/pty"
@@ -42,19 +46,82 @@ func (ts *TerminalService) SetContext(ctx context.Context) {
 	ts.ctx = ctx
 }
 
+// configPath returns the path to the termxp config file
+func configPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		dir = os.TempDir()
+	}
+	return filepath.Join(dir, "termxp", "wsl_distro")
+}
+
+// GetWSLDistro returns the saved WSL distro name, or "" if none is set
+func (ts *TerminalService) GetWSLDistro() string {
+	data, err := os.ReadFile(configPath())
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
+// SetWSLDistro saves the chosen WSL distro name to disk
+func (ts *TerminalService) SetWSLDistro(distro string) error {
+	p := configPath()
+	if err := os.MkdirAll(filepath.Dir(p), 0755); err != nil {
+		return err
+	}
+	return os.WriteFile(p, []byte(strings.TrimSpace(distro)), 0644)
+}
+
+// ListWSLDistros returns the list of installed WSL distro names.
+// Returns an empty slice on non-Windows or when WSL is not installed.
+func (ts *TerminalService) ListWSLDistros() ([]string, error) {
+	if runtime.GOOS != "windows" {
+		return []string{}, nil
+	}
+	wslPath, err := exec.LookPath("wsl.exe")
+	if err != nil {
+		return []string{}, nil
+	}
+
+	// wsl.exe --list --quiet outputs UTF-16LE on Windows; strip BOM / null bytes
+	out, err := exec.Command(wslPath, "--list", "--quiet").Output()
+	if err != nil {
+		return []string{}, fmt.Errorf("wsl --list failed: %w", err)
+	}
+
+	// Strip UTF-16 null bytes (every other byte is 0x00 in UTF-16LE ASCII range)
+	cleaned := bytes.ReplaceAll(out, []byte{0x00}, []byte{})
+	// Strip BOM if present
+	cleaned = bytes.TrimPrefix(cleaned, []byte{0xFF, 0xFE})
+
+	var distros []string
+	scanner := bufio.NewScanner(bytes.NewReader(cleaned))
+	for scanner.Scan() {
+		name := strings.TrimSpace(scanner.Text())
+		if name != "" {
+			distros = append(distros, name)
+		}
+	}
+	return distros, nil
+}
+
 // resolveShell returns the command and arguments to launch a shell.
-// On Windows it prefers WSL if available, otherwise falls back to cmd.exe.
+// On Windows it uses the saved WSL distro, or falls back to cmd.exe.
 // On Unix it picks bash or sh.
 func resolveShell() (string, []string) {
 	if runtime.GOOS == "windows" {
 		if wslPath, err := exec.LookPath("wsl.exe"); err == nil {
-			return wslPath, []string{"-d", "archlinux"}
+			ts := &TerminalService{}
+			distro := ts.GetWSLDistro()
+			if distro != "" {
+				return wslPath, []string{"-d", distro}
+			}
+			// WSL present but no distro configured — fall through to cmd.exe
 		}
-		// Fallback: plain cmd.exe
 		return "cmd.exe", []string{}
 	}
 
-	// Unix path
 	for _, sh := range []string{"/bin/bash", "/bin/sh"} {
 		if _, err := os.Stat(sh); err == nil {
 			return sh, []string{"--login"}
@@ -65,14 +132,11 @@ func resolveShell() (string, []string) {
 
 // StartSession spawns a new shell inside a PTY and returns the session ID
 func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
-	// Generate a unique session ID
 	sessionID := uuid.New().String()
 
 	shellPath, shellArgs := resolveShell()
 
-	// Start command inside PTY
 	cmd := exec.Command(shellPath, shellArgs...)
-	// Set custom environment variables so the terminal behaves like a modern color terminal
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
 
 	ptyFile, err := pty.Start(cmd)
@@ -80,7 +144,6 @@ func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
 		return "", fmt.Errorf("failed to start command in PTY: %w", err)
 	}
 
-	// Set initial win size
 	err = pty.Setsize(ptyFile, &pty.Winsize{
 		Cols: uint16(cols),
 		Rows: uint16(rows),
@@ -100,7 +163,6 @@ func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
 	ts.sessions[sessionID] = session
 	ts.mu.Unlock()
 
-	// Start reading PTY output in a goroutine
 	go ts.readLoop(session)
 
 	return sessionID, nil
@@ -117,14 +179,11 @@ func (ts *TerminalService) readLoop(s *TerminalSession) {
 			}
 			break
 		}
-
 		if n > 0 {
-			// Send output to frontend
 			wailsRuntime.EventsEmit(ts.ctx, "terminal:data:"+s.ID, string(buf[:n]))
 		}
 	}
 
-	// Clean up and emit exit event
 	ts.mu.Lock()
 	isClosed := s.closed
 	ts.mu.Unlock()

@@ -15,6 +15,10 @@ import {
     moveNode,
 } from "./utils/layout";
 
+import WslSetupDialog from "./components/WslSetupDialog.vue";
+
+import { GetWSLDistro } from "../wailsjs/go/main/TerminalService";
+
 interface Tab {
     id: string;
     name: string;
@@ -149,6 +153,16 @@ const snippets = [
 const activeTab = computed(() => {
     return tabs.value.find((t) => t.id === activeTabId.value) || null;
 });
+
+const wslDialogVisible = ref(false);
+
+function onWslDialogDone() {
+    wslDialogVisible.value = false;
+    addTab();
+    fetchStats();
+    statsInterval = window.setInterval(fetchStats, 2500);
+    window.addEventListener("keydown", handleGlobalKeyDown);
+}
 
 // Traverses layout tree to find the first terminal node (leaf)
 function getFirstTerminalNode(node: PaneNode): PaneNode | null {
@@ -392,13 +406,21 @@ async function fetchStats() {
     }
 }
 
-onMounted(() => {
+onMounted(async () => {
+    // On Windows, show the WSL picker if no distro is saved yet
+    if (navigator.userAgent.includes("Windows")) {
+        const saved = await GetWSLDistro().catch(() => "");
+        if (!saved) {
+            wslDialogVisible.value = true;
+            return; // addTab() will be called after the dialog closes
+        }
+    }
+
     addTab();
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
     window.addEventListener("keydown", handleGlobalKeyDown);
 
-    // Listen for window state changes to handle border radius
     try {
         if (typeof EventsOn === "function") {
             EventsOn("wails:window-maximise", () => {
@@ -408,7 +430,6 @@ onMounted(() => {
                 isMaximised.value = false;
             });
         }
-
         if (typeof WindowIsMaximised === "function") {
             WindowIsMaximised()
                 .then((m) => {
@@ -437,6 +458,7 @@ onBeforeUnmount(() => {
             { 'is-maximised': isMaximised },
         ]"
     >
+        <WslSetupDialog v-if="wslDialogVisible" @done="onWslDialogDone" />
         <CustomTitleBar title="TermXP" />
         <div class="main-content">
             <!-- Debug info - can be removed after check -->
