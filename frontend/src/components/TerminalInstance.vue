@@ -2,6 +2,8 @@
 import { onMounted, onBeforeUnmount, ref, watch, nextTick } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
+import { WebglAddon } from "@xterm/addon-webgl";
+
 import "@xterm/xterm/css/xterm.css";
 
 // Import Wails runtime events and generated Go bindings
@@ -30,6 +32,7 @@ const sessionId = ref<string>("");
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let webglAddon: WebglAddon | null = null;
 
 // Initialize the terminal
 onMounted(async () => {
@@ -54,6 +57,21 @@ onMounted(async () => {
 
     // 3. Open terminal in DOM container
     term.open(terminalContainer.value);
+
+    // 3b. Try to enable the GPU-accelerated renderer
+    try {
+        webglAddon = new WebglAddon();
+        // If the GPU context is lost (driver reset, tab backgrounded, etc.),
+        // dispose the addon so xterm falls back to the DOM renderer.
+        webglAddon.onContextLoss(() => {
+            webglAddon?.dispose();
+            webglAddon = null;
+        });
+        term.loadAddon(webglAddon);
+    } catch (e) {
+        console.warn("WebGL renderer unavailable, falling back to DOM renderer:", e);
+        webglAddon = null;
+    }
 
     // 4. Handle custom keys (allow Ctrl+T, Ctrl+W to bubble up to App.vue, handles copy/paste)
     term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
@@ -211,6 +229,11 @@ onBeforeUnmount(() => {
         KillSession(sId).catch((err) => {
             console.error("Failed to kill terminal session:", err);
         });
+    }
+
+    if (webglAddon) {
+        webglAddon.dispose();
+        webglAddon = null;
     }
 
     if (term) {
