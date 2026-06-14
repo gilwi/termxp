@@ -48,7 +48,7 @@ func (ts *TerminalService) SetContext(ctx context.Context) {
 func resolveShell() (string, []string) {
 	if runtime.GOOS == "windows" {
 		if wslPath, err := exec.LookPath("wsl.exe"); err == nil {
-			return wslPath, []string{}
+			return wslPath, []string{"-d", "archlinux"}
 		}
 		// Fallback: plain cmd.exe
 		return "cmd.exe", []string{}
