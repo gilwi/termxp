@@ -161,8 +161,8 @@ export function moveNode(
   const targetNode = cleanTargetInfo.node;
   const targetNodeCopy = JSON.parse(JSON.stringify(targetNode));
 
-  const isHorizontal = position === "left" || position === "right";
-  const orientation = isHorizontal ? "horizontal" : "vertical";
+  const isSideBySide = position === "left" || position === "right";
+  const orientation = isSideBySide ? "vertical" : "horizontal";
 
   const children =
     position === "left" || position === "top"
