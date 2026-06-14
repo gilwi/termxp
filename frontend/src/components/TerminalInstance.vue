@@ -30,6 +30,27 @@ const sessionId = ref<string>("");
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let resizeTimer: ReturnType<typeof setTimeout> | null = null; 
+
+const RESIZE_DEBOUNCE_MS = 120;
+
+// Performs the actual fit + backend resize. Runs once, after resizing settles.
+function applyResize() {
+    if (fitAddon && term && sessionId.value) {
+        fitAddon.fit();
+        const newCols = term.cols;
+        const newRows = term.rows;
+        ResizeTerminal(sessionId.value, newCols, newRows).catch((err) => {
+            console.error("Failed to resize backend terminal:", err);
+        });
+    }
+}
+
+// Debounced scheduler: collapses a whole drag gesture into a single resize.
+function scheduleResize() {
+    if (resizeTimer) clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(applyResize, RESIZE_DEBOUNCE_MS);
+}
 
 // Initialize the terminal
 onMounted(async () => {
@@ -108,14 +129,7 @@ onMounted(async () => {
 
     // 5. Watch for container resizing
     resizeObserver = new ResizeObserver(() => {
-        if (fitAddon && term && sessionId.value) {
-            fitAddon.fit();
-            const newCols = term.cols;
-            const newRows = term.rows;
-            ResizeTerminal(sessionId.value, newCols, newRows).catch((err) => {
-                console.error("Failed to resize backend terminal:", err);
-            });
-        }
+        scheduleResize();
     });
     resizeObserver.observe(terminalContainer.value);
 });
@@ -200,6 +214,10 @@ watch(
 
 // Cleanup on unmount
 onBeforeUnmount(() => {
+    if (resizeTimer) {
+        clearTimeout(resizeTimer);
+        resizeTimer = null;
+    }
     if (resizeObserver) {
         resizeObserver.disconnect();
     }
