@@ -69,6 +69,7 @@ export function removeNode(root: PaneNode, id: string): PaneNode | null {
     }
   }
 
+  /*
   // Collapse parent split if it is down to a single child
   if (parent.children && parent.children.length === 1) {
     const singleChild = parent.children[0];
@@ -84,6 +85,7 @@ export function removeNode(root: PaneNode, id: string): PaneNode | null {
       return singleChild;
     }
   }
+  */
 
   return root;
 }

@@ -3,8 +3,15 @@ import { ref, onMounted, onBeforeUnmount, computed } from "vue";
 import TerminalLayout from "./components/TerminalLayout.vue";
 import CustomTitleBar from "./components/CustomTitleBar.vue";
 import { GetSystemStats } from "../wailsjs/go/main/App";
-import { WriteToTerminal } from "../wailsjs/go/main/TerminalService";
-import { EventsOn, WindowIsMaximised } from "../wailsjs/runtime/runtime";
+import {
+    WriteToTerminal,
+    KillSession,
+} from "../wailsjs/go/main/TerminalService";
+import {
+    EventsOn,
+    EventsOff,
+    WindowIsMaximised,
+} from "../wailsjs/runtime/runtime";
 
 import {
     PaneNode,
@@ -159,6 +166,34 @@ function getFirstTerminalNode(node: PaneNode): PaneNode | null {
     return null;
 }
 
+// Counts total terminal nodes in a tree
+function countTerminals(node: PaneNode): number {
+    if (node.type === "terminal") return 1;
+    if (node.type === "split" && node.children) {
+        return node.children.reduce(
+            (sum, child) => sum + countTerminals(child),
+            0,
+        );
+    }
+    return 0;
+}
+
+// Recursively kill all sessions in a node tree
+function killSessionsInNode(node: PaneNode) {
+    if (node.type === "terminal") {
+        if (node.sessionId) {
+            EventsOff(`terminal:exit:${node.sessionId}`);
+            KillSession(node.sessionId).catch((err) => {
+                console.error("Failed to kill session:", err);
+            });
+        }
+    } else if (node.type === "split" && node.children) {
+        for (const child of node.children) {
+            killSessionsInNode(child);
+        }
+    }
+}
+
 // Add a new tab/session
 function addTab() {
     const id = Date.now().toString();
@@ -193,6 +228,10 @@ function closeTab(id: string) {
 
     // If maximized pane is inside this tab, reset it
     const tabToClose = tabs.value[index];
+
+    // Kill all terminal sessions in this tab
+    killSessionsInNode(tabToClose.rootNode);
+
     if (
         maximizedPaneId.value &&
         findNode(tabToClose.rootNode, maximizedPaneId.value)
@@ -229,8 +268,23 @@ function handleSplitPane(
 // Closes a terminal pane inside the current tab
 function handleClosePane(paneId: string) {
     const tab = activeTab.value;
-    if (!tab) return;
+    if (!tab) {
+        // If not in active tab, we might need to find which tab it belongs to
+        for (const t of tabs.value) {
+            const found = findNode(t.rootNode, paneId);
+            if (found) {
+                // Found it in another tab
+                performClosePane(t, paneId);
+                return;
+            }
+        }
+        return;
+    }
 
+    performClosePane(tab, paneId);
+}
+
+function performClosePane(tab: Tab, paneId: string) {
     if (maximizedPaneId.value === paneId) {
         maximizedPaneId.value = null;
     }
@@ -241,13 +295,30 @@ function handleClosePane(paneId: string) {
         return;
     }
 
+    // Kill the session before removing the node
+    const found = findNode(tab.rootNode, paneId);
+    if (found && found.node.sessionId) {
+        EventsOff(`terminal:exit:${found.node.sessionId}`);
+        KillSession(found.node.sessionId).catch((err) => {
+            console.error("Failed to kill session:", err);
+        });
+    }
+
     const updatedRoot = removeNode(tab.rootNode, paneId);
     if (updatedRoot) {
+        if (countTerminals(updatedRoot) === 0) {
+            closeTab(tab.id);
+            return;
+        }
         tab.rootNode = updatedRoot;
-        // Set focus to the first terminal we can find
-        const firstTerm = getFirstTerminalNode(updatedRoot);
-        if (firstTerm) {
-            activePaneId.value = firstTerm.id;
+
+        // Only update activePaneId if we are in the active tab
+        if (tab.id === activeTabId.value) {
+            // Set focus to the first terminal we can find
+            const firstTerm = getFirstTerminalNode(updatedRoot);
+            if (firstTerm) {
+                activePaneId.value = firstTerm.id;
+            }
         }
     }
 }
@@ -259,6 +330,12 @@ function handlePaneInitialized(paneId: string, sessionId: string) {
         const found = findNode(t.rootNode, paneId);
         if (found) {
             found.node.sessionId = sessionId;
+
+            // Listen for session exit globally to handle background termination
+            EventsOff(`terminal:exit:${sessionId}`); // Avoid duplicates
+            EventsOn(`terminal:exit:${sessionId}`, () => {
+                handleClosePane(paneId);
+            });
             break;
         }
     }

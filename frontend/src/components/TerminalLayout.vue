@@ -399,6 +399,7 @@ function onDrop(
         <!-- Terminal component -->
         <div class="pane-body">
             <TerminalInstance
+                :session-id="node.sessionId"
                 :theme="theme"
                 :fontSize="fontSize"
                 :active="activePaneId === node.id"

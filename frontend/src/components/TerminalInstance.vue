@@ -1,5 +1,12 @@
 <script lang="ts" setup>
-import { onMounted, onBeforeUnmount, ref, watch, nextTick } from "vue";
+import {
+    onMounted,
+    onBeforeUnmount,
+    ref,
+    watch,
+    nextTick,
+    computed,
+} from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
@@ -17,6 +24,7 @@ const props = defineProps<{
     theme: any;
     fontSize: number;
     active: boolean;
+    sessionId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -25,7 +33,12 @@ const emit = defineEmits<{
 }>();
 
 const terminalContainer = ref<HTMLDivElement | null>(null);
-const sessionId = ref<string>("");
+const internalSessionId = ref<string>("");
+
+// Computed session ID to use (prefer prop if provided)
+const currentSessionId = computed(
+    () => props.sessionId || internalSessionId.value,
+);
 
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
@@ -74,8 +87,9 @@ onMounted(async () => {
         if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "v") {
             if (e.type === "keydown" && !e.repeat) {
                 navigator.clipboard.readText().then((text) => {
-                    if (text && sessionId.value) {
-                        WriteToTerminal(sessionId.value, text);
+                    const sId = currentSessionId.value;
+                    if (text && sId) {
+                        WriteToTerminal(sId, text);
                     }
                 });
             }
@@ -106,13 +120,14 @@ onMounted(async () => {
         }
     });
 
-    // 5. Watch for container resizing
+    // 6. Watch for container resizing
     resizeObserver = new ResizeObserver(() => {
-        if (fitAddon && term && sessionId.value) {
+        const sId = currentSessionId.value;
+        if (fitAddon && term && sId) {
             fitAddon.fit();
             const newCols = term.cols;
             const newRows = term.rows;
-            ResizeTerminal(sessionId.value, newCols, newRows).catch((err) => {
+            ResizeTerminal(sId, newCols, newRows).catch((err) => {
                 console.error("Failed to resize backend terminal:", err);
             });
         }
@@ -123,9 +138,18 @@ onMounted(async () => {
 // Initialize Go-side PTY process and bind event streams
 async function initSession(cols: number, rows: number) {
     try {
-        const sId = await StartSession(cols, rows);
-        sessionId.value = sId;
-        emit("initialized", sId);
+        let sId = props.sessionId;
+        if (!sId) {
+            sId = await StartSession(cols, rows);
+            internalSessionId.value = sId;
+            emit("initialized", sId);
+        } else {
+            // If re-attaching, we might want to trigger a redraw.
+            // Some shells redraw on SIGWINCH (Resize).
+            await ResizeTerminal(sId, cols, rows);
+            // Also write a newline to prompt for a fresh line if possible
+            // WriteToTerminal(sId, "\n");
+        }
 
         if (!term) return;
 
@@ -141,8 +165,9 @@ async function initSession(cols: number, rows: number) {
 
         // Send frontend key input to backend
         term.onData((data) => {
-            if (sessionId.value) {
-                WriteToTerminal(sessionId.value, data).catch((err) => {
+            const currentId = currentSessionId.value;
+            if (currentId) {
+                WriteToTerminal(currentId, data).catch((err) => {
                     console.error("Failed to write to terminal:", err);
                 });
             }
@@ -178,8 +203,9 @@ watch(
             term.options.fontSize = newSize;
             nextTick(() => {
                 fitAddon?.fit();
-                if (sessionId.value) {
-                    ResizeTerminal(sessionId.value, term!.cols, term!.rows);
+                const sId = currentSessionId.value;
+                if (sId) {
+                    ResizeTerminal(sId, term!.cols, term!.rows);
                 }
             });
         }
@@ -204,13 +230,11 @@ onBeforeUnmount(() => {
         resizeObserver.disconnect();
     }
 
-    const sId = sessionId.value;
+    const sId = currentSessionId.value;
     if (sId) {
         EventsOff(`terminal:data:${sId}`);
         EventsOff(`terminal:exit:${sId}`);
-        KillSession(sId).catch((err) => {
-            console.error("Failed to kill terminal session:", err);
-        });
+        // Note: KillSession is now managed by App.vue to persist sessions during layout changes
     }
 
     if (term) {
