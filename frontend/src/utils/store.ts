@@ -13,6 +13,10 @@ import {
     WriteToTerminal,
     KillSession,
 } from "../../wailsjs/go/main/TerminalService";
+import {
+    LoadHistory,
+    AddHistoryEntry,
+} from "../../wailsjs/go/main/HistoryService";
 import { EventsOff } from "../../wailsjs/runtime/runtime";
 
 export const themes: Record<string, { name: string; cssClass: string; xterm: any }> = {
@@ -163,6 +167,11 @@ export const store = reactive({
         uptime: "0m",
     },
 
+    historyOpen: false,
+    historySearchQuery: "",
+    activeHistoryIndex: 0,
+    history: [] as Array<{ id: string; command: string; host: string; timestamp: number }>,
+
     // Getters
     getActiveTab(): Tab | null {
         return this.tabs.find((t) => t.id === this.activeTabId) || null;
@@ -188,6 +197,30 @@ export const store = reactive({
         this.tabs.push(newTab);
         this.activeTabId = id;
         this.activePaneId = rootPaneId;
+    },
+
+    async fetchHistory() {
+        try {
+            const list = await LoadHistory();
+            if (list) {
+                this.history = list;
+            }
+        } catch (err) {
+            console.error("Failed to load history:", err);
+        }
+    },
+
+    async addHistoryEntry(command: string, host: string) {
+        if (!command) return;
+        if (this.history.length > 0 && this.history[0].command === command) {
+            return;
+        }
+        try {
+            await AddHistoryEntry(command, host);
+            await this.fetchHistory();
+        } catch (err) {
+            console.error("Failed to add history entry:", err);
+        }
     },
 
     selectTab(id: string) {

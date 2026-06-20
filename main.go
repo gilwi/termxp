@@ -19,6 +19,7 @@ func main() {
 	// Create instances of the app structures
 	app := NewApp()
 	terminalService := NewTerminalService()
+	historyService := NewHistoryService()
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -40,6 +41,7 @@ func main() {
 		Bind: []interface{}{
 			app,
 			terminalService,
+			historyService,
 		},
 		Windows: &windows.Options{
 			WebviewIsTransparent: true,
