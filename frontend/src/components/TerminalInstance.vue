@@ -1,3 +1,7 @@
+<template>
+    <div class="terminal-instance-container" ref="terminalContainer"></div>
+</template>
+
 <script lang="ts" setup>
 import {
     onMounted,
@@ -10,17 +14,20 @@ import {
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-
-// Import Wails runtime events and generated Go bindings
-import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
+import { EventsOn } from "../../wailsjs/runtime/runtime";
 import {
     StartSession,
     WriteToTerminal,
     ResizeTerminal,
-    KillSession,
 } from "../../wailsjs/go/main/TerminalService";
+import {
+    store,
+    instanceCache,
+    generateUUID,
+} from "../utils/store";
 
 const props = defineProps<{
+    paneId: string;
     theme: any;
     fontSize: number;
     active: boolean;
@@ -35,7 +42,6 @@ const emit = defineEmits<{
 const terminalContainer = ref<HTMLDivElement | null>(null);
 const internalSessionId = ref<string>("");
 
-// Computed session ID to use (prefer prop if provided)
 const currentSessionId = computed(
     () => props.sessionId || internalSessionId.value,
 );
@@ -43,127 +49,166 @@ const currentSessionId = computed(
 let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
+let localWrapper: HTMLDivElement | null = null;
 
-// Initialize the terminal
+function safeFit(): boolean {
+    if (!fitAddon || !term || !terminalContainer.value) return false;
+    const width = terminalContainer.value.offsetWidth;
+    const height = terminalContainer.value.offsetHeight;
+    if (width > 0 && height > 0) {
+        try {
+            fitAddon.fit();
+            return true;
+        } catch (e) {
+            console.error("fit failed:", e);
+        }
+    }
+    return false;
+}
+
 onMounted(async () => {
     if (!terminalContainer.value) return;
 
-    // 1. Create Xterm Terminal instance
-    term = new Terminal({
-        fontSize: props.fontSize,
-        fontFamily:
-            '"Anka/Coder", SFMono-Regular, Consolas, Menlo, Monaco, monospace',
-        theme: props.theme,
-        cursorBlink: true,
-        cursorStyle: "block",
-        cursorWidth: 2,
-        drawBoldTextInBrightColors: true,
-        allowProposedApi: true,
-    });
+    let cached = instanceCache.get(props.paneId);
 
-    // 2. Setup Fit Addon
-    fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
+    // If cache hits, we just re-attach the existing DOM element to the new parent
+    if (cached) {
+        term = cached.term;
+        fitAddon = cached.fitAddon;
+        localWrapper = cached.containerWrapper;
 
-    // 3. Open terminal in DOM container
-    term.open(terminalContainer.value);
+        terminalContainer.value.appendChild(localWrapper);
 
-    // 4. Handle custom keys (allow Ctrl+T, Ctrl+W to bubble up to App.vue, handles copy/paste)
-    term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
-        // Copy: Ctrl+Shift+C
-        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c") {
-            if (e.type === "keydown" && !e.repeat) {
-                const selection = term?.getSelection();
-                if (selection) {
-                    navigator.clipboard.writeText(selection);
+        term.options.theme = props.theme;
+        term.options.fontSize = props.fontSize;
+
+        nextTick(() => {
+            if (safeFit()) {
+                const sId = currentSessionId.value;
+                if (sId) {
+                    ResizeTerminal(sId, term!.cols, term!.rows).catch(() => {});
                 }
             }
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-        }
+        });
+    } else {
+        // First run logic
+        localWrapper = document.createElement("div");
+        localWrapper.style.width = "100%";
+        localWrapper.style.height = "100%";
+        terminalContainer.value.appendChild(localWrapper);
 
-        // Paste: Ctrl+Shift+V
-        if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "v") {
-            if (e.type === "keydown" && !e.repeat) {
-                navigator.clipboard.readText().then((text) => {
-                    const sId = currentSessionId.value;
-                    if (text && sId) {
-                        WriteToTerminal(sId, text);
-                    }
+        term = new Terminal({
+            fontSize: props.fontSize,
+            fontFamily:
+                '"Anka/Coder", SFMono-Regular, Consolas, Menlo, Monaco, monospace',
+            theme: props.theme,
+            cursorBlink: true,
+            cursorStyle: "block",
+            cursorWidth: 2,
+            drawBoldTextInBrightColors: true,
+            allowProposedApi: true,
+        });
+
+        fitAddon = new FitAddon();
+        term.loadAddon(fitAddon);
+
+        term.open(localWrapper);
+
+        term.attachCustomKeyEventHandler((e: KeyboardEvent) => {
+            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "c") {
+                if (e.type === "keydown" && !e.repeat) {
+                    const selection = term?.getSelection();
+                    if (selection) navigator.clipboard.writeText(selection);
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                return false;
+            }
+            if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "v") {
+                if (e.type === "keydown" && !e.repeat) {
+                    navigator.clipboard.readText().then((text) => {
+                        const sId = currentSessionId.value;
+                        if (text && sId) WriteToTerminal(sId, text);
+                    });
+                }
+                e.preventDefault();
+                e.stopPropagation();
+                return false;
+            }
+            if (
+                e.ctrlKey &&
+                e.shiftKey &&
+                ["t", "w", "x", "e", "o"].includes(e.key.toLowerCase())
+            ) {
+                return false;
+            }
+            return true;
+        });
+
+        // Initialize cache
+        instanceCache.set(props.paneId, {
+            term,
+            fitAddon,
+            containerWrapper: localWrapper,
+            initialized: false,
+            sId: "",
+        });
+
+        setTimeout(() => {
+            if (fitAddon && term) {
+                // Try to fit, but suppress errors if container is still hiding
+                safeFit();
+
+                // Floor the dimensions to a minimum safe size so the Go backend doesn't crash
+                const cols = Math.max(term.cols || 80, 20);
+                const rows = Math.max(term.rows || 24, 10);
+
+                initSession(cols, rows);
+            }
+        }, 50);
+    }
+
+    resizeObserver = new ResizeObserver(() => {
+        if (safeFit()) {
+            const sId = currentSessionId.value;
+            if (sId) {
+                ResizeTerminal(sId, term!.cols, term!.rows).catch((err) => {
+                    console.error("Failed to resize backend terminal:", err);
                 });
             }
-            e.preventDefault();
-            e.stopPropagation();
-            return false;
-        }
-
-        if (
-            e.ctrlKey &&
-            e.shiftKey &&
-            (e.key.toLowerCase() === "t" ||
-                e.key.toLowerCase() === "w" ||
-                e.key.toLowerCase() === "x" ||
-                e.key.toLowerCase() === "e" ||
-                e.key.toLowerCase() === "o")
-        ) {
-            return false; // allow to bubble
-        }
-        return true;
-    });
-
-    // 5. Force initial fit
-    nextTick(() => {
-        if (fitAddon && term) {
-            fitAddon.fit();
-            initSession(term.cols, term.rows);
-        }
-    });
-
-    // 6. Watch for container resizing
-    resizeObserver = new ResizeObserver(() => {
-        const sId = currentSessionId.value;
-        if (fitAddon && term && sId) {
-            fitAddon.fit();
-            const newCols = term.cols;
-            const newRows = term.rows;
-            ResizeTerminal(sId, newCols, newRows).catch((err) => {
-                console.error("Failed to resize backend terminal:", err);
-            });
         }
     });
     resizeObserver.observe(terminalContainer.value);
 });
 
-// Initialize Go-side PTY process and bind event streams
 async function initSession(cols: number, rows: number) {
     try {
-        let sId = props.sessionId;
-        if (!sId) {
-            sId = await StartSession(cols, rows);
+        let sId: string = props.sessionId || "";
+        const isNewSession = !sId;
+        if (isNewSession) {
+            sId = generateUUID();
             internalSessionId.value = sId;
             emit("initialized", sId);
-        } else {
-            // If re-attaching, we might want to trigger a redraw.
-            // Some shells redraw on SIGWINCH (Resize).
-            await ResizeTerminal(sId, cols, rows);
-            // Also write a newline to prompt for a fresh line if possible
-            // WriteToTerminal(sId, "\n");
         }
 
         if (!term) return;
 
-        // Listen to data streaming from backend
+        const cached = instanceCache.get(props.paneId);
+        if (cached) {
+            cached.sId = sId;
+            if (cached.initialized) return; // Prevent double-binding events
+            cached.initialized = true;
+        }
+
+        // Register listeners BEFORE starting the backend session to prevent race condition
         EventsOn(`terminal:data:${sId}`, (data: string) => {
             term?.write(data);
         });
 
-        // Listen to shell process termination
         EventsOn(`terminal:exit:${sId}`, () => {
             emit("exit");
         });
 
-        // Send frontend key input to backend
         term.onData((data) => {
             const currentId = currentSessionId.value;
             if (currentId) {
@@ -173,10 +218,18 @@ async function initSession(cols: number, rows: number) {
             }
         });
 
-        // Focus if currently active
-        if (props.active) {
-            term.focus();
+        if (isNewSession) {
+            await StartSession(sId, cols, rows);
+        } else {
+            await ResizeTerminal(sId, cols, rows);
         }
+
+        // Sync backend size if frontend was resized/fitted during initialization
+        if (term.cols !== cols || term.rows !== rows) {
+            await ResizeTerminal(sId, term.cols, term.rows).catch(() => {});
+        }
+
+        if (props.active) term.focus();
     } catch (err) {
         console.error("Failed to start terminal session:", err);
         term?.write(
@@ -185,13 +238,10 @@ async function initSession(cols: number, rows: number) {
     }
 }
 
-// Watchers for props update
 watch(
     () => props.theme,
     (newTheme) => {
-        if (term) {
-            term.options.theme = newTheme;
-        }
+        if (term) term.options.theme = newTheme;
     },
     { deep: true },
 );
@@ -199,13 +249,13 @@ watch(
 watch(
     () => props.fontSize,
     (newSize) => {
-        if (term && fitAddon) {
+        if (term) {
             term.options.fontSize = newSize;
             nextTick(() => {
-                fitAddon?.fit();
-                const sId = currentSessionId.value;
-                if (sId) {
-                    ResizeTerminal(sId, term!.cols, term!.rows);
+                if (safeFit()) {
+                    const sId = currentSessionId.value;
+                    if (sId)
+                        ResizeTerminal(sId, term!.cols, term!.rows).catch(() => {});
                 }
             });
         }
@@ -215,87 +265,24 @@ watch(
 watch(
     () => props.active,
     (isActive) => {
-        if (isActive && term && fitAddon) {
+        if (isActive && term) {
             nextTick(() => {
-                fitAddon?.fit();
+                safeFit();
                 term?.focus();
             });
         }
     },
 );
 
-// Cleanup on unmount
 onBeforeUnmount(() => {
-    if (resizeObserver) {
-        resizeObserver.disconnect();
-    }
-
-    const sId = currentSessionId.value;
-    if (sId) {
-        EventsOff(`terminal:data:${sId}`);
-        EventsOff(`terminal:exit:${sId}`);
-        // Note: KillSession is now managed by App.vue to persist sessions during layout changes
-    }
-
-    if (term) {
-        term.dispose();
-    }
+    if (resizeObserver) resizeObserver.disconnect();
 });
 </script>
 
-<template>
-    <div class="terminal-wrapper">
-        <div ref="terminalContainer" class="terminal-container"></div>
-    </div>
-</template>
-
 <style scoped>
-.terminal-wrapper {
+.terminal-instance-container {
     width: 100%;
     height: 100%;
-    padding: 12px;
-    background-color: transparent;
-    box-sizing: border-box;
     overflow: hidden;
-}
-
-.terminal-container {
-    width: 100%;
-    height: 100%;
-    box-sizing: border-box;
-}
-
-/* Customize xterm selection and scrollbars natively */
-:deep(.xterm) {
-    padding: 4px;
-}
-
-:deep(.xterm-viewport) {
-    --scrollbar-thumb: var(
-        --terminal-scrollbar-thumb,
-        rgba(255, 255, 255, 0.15)
-    );
-    --scrollbar-track: var(--terminal-scrollbar-track, transparent);
-
-    scrollbar-color: var(--scrollbar-thumb) var(--scrollbar-track);
-    scrollbar-width: thin;
-    overflow-y: auto;
-}
-
-:deep(.xterm-viewport::-webkit-scrollbar) {
-    width: 8px;
-}
-
-:deep(.xterm-viewport::-webkit-scrollbar-thumb) {
-    background: var(--scrollbar-thumb);
-    border-radius: 4px;
-}
-
-:deep(.xterm-viewport::-webkit-scrollbar-thumb:hover) {
-    background: var(--terminal-scrollbar-thumb-hover, rgba(255, 255, 255, 0.3));
-}
-
-:deep(.xterm-viewport::-webkit-scrollbar-track) {
-    background: var(--scrollbar-track);
 }
 </style>
