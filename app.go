@@ -3,9 +3,11 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"runtime"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -28,6 +30,77 @@ func NewApp() *App {
 	return &App{
 		collector: collector,
 	}
+}
+
+// GetConfigPath returns the path to the config JSON file.
+func (a *App) GetConfigPath() (string, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	appDir := filepath.Join(configDir, "termxp")
+	// Ensure directory exists
+	err = os.MkdirAll(appDir, 0755)
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(appDir, "config.json"), nil
+}
+
+// LoadConfig loads the settings from the JSON config file.
+func (a *App) LoadConfig() (map[string]interface{}, error) {
+	path, err := a.GetConfigPath()
+	if err != nil {
+		return nil, err
+	}
+
+	// If file doesn't exist, return default config
+	if _, err := os.Stat(path); os.IsNotExist(err) {
+		return map[string]interface{}{
+			"theme":    "glassmorphic",
+			"fontSize": 14,
+		}, nil
+	}
+
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+
+	var config map[string]interface{}
+	if err := json.Unmarshal(data, &config); err != nil {
+		return nil, err
+	}
+
+	return config, nil
+}
+
+// SaveConfig saves the configuration by merging the provided keys with the existing config.
+func (a *App) SaveConfig(config map[string]interface{}) error {
+	path, err := a.GetConfigPath()
+	if err != nil {
+		return err
+	}
+
+	existing := make(map[string]interface{})
+	if _, err := os.Stat(path); err == nil {
+		data, readErr := os.ReadFile(path)
+		if readErr == nil {
+			_ = json.Unmarshal(data, &existing)
+		}
+	}
+
+	// Merge incoming keys
+	for k, v := range config {
+		existing[k] = v
+	}
+
+	data, err := json.MarshalIndent(existing, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	return os.WriteFile(path, data, 0644)
 }
 
 // startup is called when the app starts. The context is saved
