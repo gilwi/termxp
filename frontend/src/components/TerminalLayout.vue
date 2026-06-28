@@ -2,38 +2,21 @@
 import { ref, computed } from "vue";
 import TerminalInstance from "./TerminalInstance.vue";
 import { PaneNode, findNode } from "../utils/layout";
+import { store, themes } from "../utils/store";
 
 const props = defineProps<{
     node: PaneNode;
-    activePaneId: string;
-    maximizedPaneId: string | null;
-    theme: any;
-    themeClass: string;
-    fontSize: number;
 }>();
 
-const emit = defineEmits<{
-    (
-        e: "split-pane",
-        paneId: string,
-        orientation: "horizontal" | "vertical",
-    ): void;
-    (e: "close-pane", paneId: string): void;
-    (e: "pane-initialized", paneId: string, sessionId: string): void;
-    (e: "focus-pane", paneId: string): void;
-    (e: "toggle-maximize", paneId: string): void;
-    (
-        e: "move-pane",
-        sourceId: string,
-        targetId: string,
-        position: "left" | "right" | "top" | "bottom" | "swap",
-    ): void;
-    (e: "update-sizes", nodeId: string, newSizes: number[]): void;
-}>();
+const activePaneId = computed(() => store.activePaneId);
+const maximizedPaneId = computed(() => store.maximizedPaneId);
+const theme = computed(() => themes[store.currentTheme].xterm);
+const themeClass = computed(() => themes[store.currentTheme].cssClass);
+const fontSize = computed(() => store.fontSize);
 
 function childContainsMaximized(child: PaneNode): boolean {
-    if (!props.maximizedPaneId) return false;
-    return findNode(child, props.maximizedPaneId) !== null;
+    if (!store.maximizedPaneId) return false;
+    return findNode(child, store.maximizedPaneId) !== null;
 }
 
 // Flex style computed for split children
@@ -53,7 +36,7 @@ const containerStyle = computed(() => {
 function getChildStyle(index: number) {
     if (props.node.type !== "split" || !props.node.sizes) return {};
 
-    if (props.maximizedPaneId) {
+    if (store.maximizedPaneId) {
         const child = props.node.children![index];
         if (childContainsMaximized(child)) {
             return {
@@ -132,7 +115,7 @@ function onResizeDrag(e: MouseEvent) {
     updatedSizes[activeSplitterIndex] = newSizeA;
     updatedSizes[activeSplitterIndex + 1] = newSizeB;
 
-    emit("update-sizes", props.node.id, updatedSizes);
+    store.updateSizes(props.node.id, updatedSizes);
 }
 
 function endResize() {
@@ -157,7 +140,7 @@ const contextMenuY = ref(0);
 
 function showContextMenu(e: MouseEvent) {
     e.preventDefault();
-    emit("focus-pane", props.node.id);
+    store.activePaneId = props.node.id;
 
     contextMenuX.value = e.clientX;
     contextMenuY.value = e.clientY;
@@ -203,6 +186,7 @@ function onPaneDragLeave(e: DragEvent) {
     }
 }
 
+// Allow dragover
 function onPaneDragOver(e: DragEvent) {
     e.preventDefault();
 }
@@ -218,7 +202,7 @@ function onDrop(
 
     const sourceId = e.dataTransfer?.getData("text/plain");
     if (sourceId && sourceId !== props.node.id) {
-        emit("move-pane", sourceId, props.node.id, zone);
+        store.movePane(sourceId, props.node.id, zone);
     }
 }
 </script>
@@ -235,23 +219,7 @@ function onDrop(
             <TerminalLayout
                 v-show="!maximizedPaneId || childContainsMaximized(child)"
                 :node="child"
-                :active-pane-id="activePaneId"
-                :maximized-pane-id="maximizedPaneId"
-                :theme="theme"
-                :theme-class="themeClass"
-                :font-size="fontSize"
                 :style="getChildStyle(index)"
-                @split-pane="(pId, orient) => emit('split-pane', pId, orient)"
-                @close-pane="(pId) => emit('close-pane', pId)"
-                @pane-initialized="
-                    (pId, sId) => emit('pane-initialized', pId, sId)
-                "
-                @focus-pane="(pId) => emit('focus-pane', pId)"
-                @toggle-maximize="(pId) => emit('toggle-maximize', pId)"
-                @move-pane="(src, tgt, pos) => emit('move-pane', src, tgt, pos)"
-                @update-sizes="
-                    (nodeId, sizes) => emit('update-sizes', nodeId, sizes)
-                "
             />
             <!-- Splitter bar indicator -->
             <div
@@ -273,7 +241,7 @@ function onDrop(
     <div
         v-else
         :class="['terminal-pane', { active: activePaneId === node.id }]"
-        @click.capture="emit('focus-pane', node.id)"
+        @click.capture="store.activePaneId = node.id"
         @contextmenu.prevent="showContextMenu"
         @dragenter="onPaneDragEnter"
         @dragover="onPaneDragOver"
@@ -294,7 +262,7 @@ function onDrop(
                 <!-- Split controls -->
                 <button
                     class="pane-btn"
-                    @click="emit('split-pane', node.id, 'vertical')"
+                    @click="store.splitPane(node.id, 'vertical')"
                     title="Split Vertically (Ctrl+Shift+E)"
                 >
                     <svg
@@ -318,7 +286,7 @@ function onDrop(
                 </button>
                 <button
                     class="pane-btn"
-                    @click="emit('split-pane', node.id, 'horizontal')"
+                    @click="store.splitPane(node.id, 'horizontal')"
                     title="Split Horizontally (Ctrl+Shift+O)"
                 >
                     <svg
@@ -343,7 +311,7 @@ function onDrop(
                 <!-- Maximize/Restore control -->
                 <button
                     class="pane-btn"
-                    @click="emit('toggle-maximize', node.id)"
+                    @click="store.toggleMaximize(node.id)"
                     :title="
                         maximizedPaneId === node.id
                             ? 'Restore Pane'
@@ -378,7 +346,7 @@ function onDrop(
                 <!-- Close pane control -->
                 <button
                     class="pane-btn close"
-                    @click="emit('close-pane', node.id)"
+                    @click="store.closePane(node.id)"
                     title="Close Shell Pane"
                 >
                     <svg
@@ -399,18 +367,18 @@ function onDrop(
         <!-- Terminal component -->
         <div class="pane-body">
             <TerminalInstance
+                :pane-id="node.id"
                 :session-id="node.sessionId"
                 :theme="theme"
                 :fontSize="fontSize"
                 :active="activePaneId === node.id"
-                @exit="emit('close-pane', node.id)"
-                @initialized="(sId) => emit('pane-initialized', node.id, sId)"
+                @exit="store.closePane(node.id)"
+                @initialized="(sId) => store.paneInitialized(node.id, sId)"
             />
         </div>
 
         <!-- Drag & Drop Overlay Visual Areas -->
         <div v-if="dragOverActive" class="dnd-overlay-container">
-            <!-- 5 dropzones: Top, Bottom, Left, Right, Center -->
             <div
                 class="dropzone dropzone-top"
                 :class="{ active: activeDropZone === 'top' }"
@@ -465,21 +433,21 @@ function onDrop(
             >
                 <button
                     class="context-menu-item"
-                    @click="emit('split-pane', node.id, 'vertical')"
+                    @click="store.splitPane(node.id, 'vertical')"
                 >
                     <span class="item-icon">❘</span> Split Vertically
                     (Ctrl+Shift+E)
                 </button>
                 <button
                     class="context-menu-item"
-                    @click="emit('split-pane', node.id, 'horizontal')"
+                    @click="store.splitPane(node.id, 'horizontal')"
                 >
                     <span class="item-icon">▬</span> Split Horizontally
                     (Ctrl+Shift+O)
                 </button>
                 <button
                     class="context-menu-item"
-                    @click="emit('toggle-maximize', node.id)"
+                    @click="store.toggleMaximize(node.id)"
                 >
                     <span class="item-icon">{{
                         maximizedPaneId === node.id ? "❐" : "⛶"
@@ -493,7 +461,7 @@ function onDrop(
                 <div class="context-menu-divider"></div>
                 <button
                     class="context-menu-item close-item"
-                    @click="emit('close-pane', node.id)"
+                    @click="store.closePane(node.id)"
                 >
                     <span class="item-icon font-mono">✕</span> Close Pane
                 </button>

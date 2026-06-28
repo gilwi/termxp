@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/creack/pty"
-	"github.com/google/uuid"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
@@ -42,11 +41,8 @@ func (ts *TerminalService) SetContext(ctx context.Context) {
 	ts.ctx = ctx
 }
 
-// StartSession spawns a new shell inside a PTY and returns the session ID
-func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
-	// Generate a unique session ID
-	sessionID := uuid.New().String()
-
+// StartSession spawns a new shell inside a PTY with the given session ID
+func (ts *TerminalService) StartSession(sessionID string, cols, rows int) error {
 	// Try to find a suitable shell (bash or sh)
 	shellPath := "/bin/bash"
 	if _, err := os.Stat(shellPath); os.IsNotExist(err) {
@@ -60,7 +56,7 @@ func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
 
 	ptyFile, err := pty.Start(cmd)
 	if err != nil {
-		return "", fmt.Errorf("failed to start command in PTY: %w", err)
+		return fmt.Errorf("failed to start command in PTY: %w", err)
 	}
 
 	// Set initial win size
@@ -70,7 +66,7 @@ func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
 	})
 	if err != nil {
 		ptyFile.Close()
-		return "", fmt.Errorf("failed to set size: %w", err)
+		return fmt.Errorf("failed to set size: %w", err)
 	}
 
 	session := &TerminalSession{
@@ -86,7 +82,7 @@ func (ts *TerminalService) StartSession(cols, rows int) (string, error) {
 	// Start reading PTY output in a goroutine
 	go ts.readLoop(session)
 
-	return sessionID, nil
+	return nil
 }
 
 // readLoop reads output from the PTY and emits coalesced events to the frontend.

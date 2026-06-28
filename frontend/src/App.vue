@@ -4,143 +4,13 @@ import TerminalLayout from "./components/TerminalLayout.vue";
 import CustomTitleBar from "./components/CustomTitleBar.vue";
 import { GetSystemStats } from "../wailsjs/go/main/App";
 import {
-    WriteToTerminal,
-    KillSession,
-} from "../wailsjs/go/main/TerminalService";
-import {
     EventsOn,
-    EventsOff,
     WindowIsMaximised,
 } from "../wailsjs/runtime/runtime";
+import { store, themes } from "./utils/store";
 
-import {
-    PaneNode,
-    createTerminalNode,
-    findNode,
-    removeNode,
-    splitNode,
-    moveNode,
-} from "./utils/layout";
-
-interface Tab {
-    id: string;
-    name: string;
-    rootNode: PaneNode;
-}
-
-const themes: Record<string, { name: string; cssClass: string; xterm: any }> = {
-    glassmorphic: {
-        name: "Glassmorphic",
-        cssClass: "theme-glassmorphic",
-        xterm: {
-            background: "rgba(14, 10, 30, 0.4)",
-            foreground: "#f1f5f9",
-            cursor: "#9333ea",
-            selectionBackground: "rgba(255, 255, 255, 0.1)",
-            black: "#0f0a1e",
-            red: "#f43f5e",
-            green: "#10b981",
-            yellow: "#fbbf24",
-            blue: "#3b82f6",
-            magenta: "#a855f7",
-            cyan: "#06b6d4",
-            white: "#f1f5f9",
-        },
-    },
-    cyberpunk: {
-        name: "Cyberpunk",
-        cssClass: "theme-cyberpunk",
-        xterm: {
-            background: "#040408",
-            foreground: "#00ffcc",
-            cursor: "#ff007f",
-            selectionBackground: "rgba(255, 0, 127, 0.3)",
-            black: "#07070e",
-            red: "#ff0055",
-            green: "#00ffcc",
-            yellow: "#ffe600",
-            blue: "#0066ff",
-            magenta: "#ff00ff",
-            cyan: "#00ffff",
-            white: "#ffffff",
-        },
-    },
-    dracula: {
-        name: "Dracula",
-        cssClass: "theme-dracula",
-        xterm: {
-            background: "#282a36",
-            foreground: "#f8f8f2",
-            cursor: "#ff79c6",
-            selectionBackground: "rgba(255, 255, 255, 0.1)",
-            black: "#1e1f29",
-            red: "#ff5555",
-            green: "#50fa7b",
-            yellow: "#f1fa8c",
-            blue: "#bd93f9",
-            magenta: "#ff79c6",
-            cyan: "#8be9fd",
-            white: "#f8f8f2",
-        },
-    },
-    matrix: {
-        name: "Matrix",
-        cssClass: "theme-matrix",
-        xterm: {
-            background: "#000000",
-            foreground: "#00ff00",
-            cursor: "#00ff00",
-            selectionBackground: "rgba(0, 255, 0, 0.25)",
-            black: "#000000",
-            red: "#005500",
-            green: "#00ff00",
-            yellow: "#33cc33",
-            blue: "#009900",
-            magenta: "#00ff00",
-            cyan: "#00ff00",
-            white: "#55ff55",
-        },
-    },
-    monokai: {
-        name: "Monokai",
-        cssClass: "theme-monokai",
-        xterm: {
-            background: "#272822",
-            foreground: "#f8f8f2",
-            cursor: "#f92672",
-            selectionBackground: "rgba(255, 255, 255, 0.1)",
-            black: "#1e1e1e",
-            red: "#f92672",
-            green: "#a6e22e",
-            yellow: "#f4bf75",
-            blue: "#66d9ef",
-            magenta: "#ae81ff",
-            cyan: "#a1efe4",
-            white: "#f8f8f2",
-        },
-    },
-};
-
-// Application reactive states
-const tabs = ref<Tab[]>([]);
-const activeTabId = ref<string>("");
-const activePaneId = ref<string>("");
-const maximizedPaneId = ref<string | null>(null);
 const isMaximised = ref<boolean>(false);
-const currentTheme = ref<string>("glassmorphic");
-const fontSize = ref<number>(14);
-const sidebarOpen = ref<boolean>(false);
-const editingTabId = ref<string | null>(null);
-const editingName = ref<string>("");
-const renameInputRef = ref<HTMLInputElement | null>(null);
-
-// Stats metrics
-const stats = ref({
-    cpu: 0,
-    memory: 0,
-    memoryRaw: "0 MB",
-    uptime: "0m",
-});
+const renameInputRef = ref<HTMLInputElement[]>([]);
 
 // Command snippets list
 const snippets = [
@@ -152,269 +22,15 @@ const snippets = [
     { label: "Who Am I", cmd: "whoami && pwd" },
 ];
 
-// Computed active tab object
-const activeTab = computed(() => {
-    return tabs.value.find((t) => t.id === activeTabId.value) || null;
-});
-
-// Traverses layout tree to find the first terminal node (leaf)
-function getFirstTerminalNode(node: PaneNode): PaneNode | null {
-    if (node.type === "terminal") return node;
-    if (node.type === "split" && node.children && node.children.length > 0) {
-        return getFirstTerminalNode(node.children[0]);
-    }
-    return null;
-}
-
-// Counts total terminal nodes in a tree
-function countTerminals(node: PaneNode): number {
-    if (node.type === "terminal") return 1;
-    if (node.type === "split" && node.children) {
-        return node.children.reduce(
-            (sum, child) => sum + countTerminals(child),
-            0,
-        );
-    }
-    return 0;
-}
-
-// Recursively kill all sessions in a node tree
-function killSessionsInNode(node: PaneNode) {
-    if (node.type === "terminal") {
-        if (node.sessionId) {
-            EventsOff(`terminal:exit:${node.sessionId}`);
-            KillSession(node.sessionId).catch((err) => {
-                console.error("Failed to kill session:", err);
-            });
-        }
-    } else if (node.type === "split" && node.children) {
-        for (const child of node.children) {
-            killSessionsInNode(child);
-        }
-    }
-}
-
-// Add a new tab/session
-function addTab() {
-    const id = Date.now().toString();
-    const rootPaneId = `pane-${Date.now()}`;
-    const index = tabs.value.length + 1;
-    const newTab: Tab = {
-        id,
-        name: `Shell ${index}`,
-        rootNode: createTerminalNode(rootPaneId, ""),
-    };
-    tabs.value.push(newTab);
-    activeTabId.value = id;
-    activePaneId.value = rootPaneId;
-}
-
-// Select specific tab
-function selectTab(id: string) {
-    activeTabId.value = id;
-    const tab = tabs.value.find((t) => t.id === id);
-    if (tab) {
-        const firstTerm = getFirstTerminalNode(tab.rootNode);
-        if (firstTerm) {
-            activePaneId.value = firstTerm.id;
-        }
-    }
-}
-
-// Close active tab
-function closeTab(id: string) {
-    const index = tabs.value.findIndex((t) => t.id === id);
-    if (index === -1) return;
-
-    // If maximized pane is inside this tab, reset it
-    const tabToClose = tabs.value[index];
-
-    // Kill all terminal sessions in this tab
-    killSessionsInNode(tabToClose.rootNode);
-
-    if (
-        maximizedPaneId.value &&
-        findNode(tabToClose.rootNode, maximizedPaneId.value)
-    ) {
-        maximizedPaneId.value = null;
-    }
-
-    tabs.value.splice(index, 1);
-
-    if (activeTabId.value === id) {
-        if (tabs.value.length > 0) {
-            const nextActiveIndex = Math.min(index, tabs.value.length - 1);
-            selectTab(tabs.value[nextActiveIndex].id);
-        } else {
-            activeTabId.value = "";
-            activePaneId.value = "";
-        }
-    }
-}
-
-// Splits the target pane inside the current tab
-function handleSplitPane(
-    paneId: string,
-    orientation: "horizontal" | "vertical",
-) {
-    const tab = activeTab.value;
-    if (!tab) return;
-
-    const newPaneId = `pane-${Date.now()}`;
-    tab.rootNode = splitNode(tab.rootNode, paneId, newPaneId, orientation);
-    activePaneId.value = newPaneId;
-}
-
-// Closes a terminal pane inside the current tab
-function handleClosePane(paneId: string) {
-    const tab = activeTab.value;
-    if (!tab) {
-        // If not in active tab, we might need to find which tab it belongs to
-        for (const t of tabs.value) {
-            const found = findNode(t.rootNode, paneId);
-            if (found) {
-                // Found it in another tab
-                performClosePane(t, paneId);
-                return;
-            }
-        }
-        return;
-    }
-
-    performClosePane(tab, paneId);
-}
-
-function performClosePane(tab: Tab, paneId: string) {
-    if (maximizedPaneId.value === paneId) {
-        maximizedPaneId.value = null;
-    }
-
-    // If this is the absolute only pane left, close the entire tab
-    if (tab.rootNode.type === "terminal" && tab.rootNode.id === paneId) {
-        closeTab(tab.id);
-        return;
-    }
-
-    // Kill the session before removing the node
-    const found = findNode(tab.rootNode, paneId);
-    if (found && found.node.sessionId) {
-        EventsOff(`terminal:exit:${found.node.sessionId}`);
-        KillSession(found.node.sessionId).catch((err) => {
-            console.error("Failed to kill session:", err);
-        });
-    }
-
-    const updatedRoot = removeNode(tab.rootNode, paneId);
-    if (updatedRoot) {
-        if (countTerminals(updatedRoot) === 0) {
-            closeTab(tab.id);
-            return;
-        }
-        tab.rootNode = updatedRoot;
-
-        // Only update activePaneId if we are in the active tab
-        if (tab.id === activeTabId.value) {
-            // Set focus to the first terminal we can find
-            const firstTerm = getFirstTerminalNode(updatedRoot);
-            if (firstTerm) {
-                activePaneId.value = firstTerm.id;
-            }
-        }
-    }
-}
-
-// Backend terminal PTY initialization callback
-function handlePaneInitialized(paneId: string, sessionId: string) {
-    // Seek across all tabs for safety
-    for (const t of tabs.value) {
-        const found = findNode(t.rootNode, paneId);
-        if (found) {
-            found.node.sessionId = sessionId;
-
-            // Listen for session exit globally to handle background termination
-            EventsOff(`terminal:exit:${sessionId}`); // Avoid duplicates
-            EventsOn(`terminal:exit:${sessionId}`, () => {
-                handleClosePane(paneId);
-            });
-            break;
-        }
-    }
-}
-
-// Resizes a split node's children ratios
-function handleUpdateSizes(nodeId: string, newSizes: number[]) {
-    const tab = activeTab.value;
-    if (!tab) return;
-    const found = findNode(tab.rootNode, nodeId);
-    if (found) {
-        found.node.sizes = newSizes;
-    }
-}
-
-function toggleMaximize(paneId?: string) {
-    if (maximizedPaneId.value) {
-        maximizedPaneId.value = null;
-    } else {
-        const targetId = paneId || activePaneId.value;
-        if (targetId) {
-            maximizedPaneId.value = targetId;
-        }
-    }
-}
-
-// Rearrange terminal panes via Drag & Drop
-function handleMovePane(
-    sourceId: string,
-    targetId: string,
-    position: "left" | "right" | "top" | "bottom" | "swap",
-) {
-    const tab = activeTab.value;
-    if (!tab) return;
-
-    const updatedRoot = moveNode(tab.rootNode, sourceId, targetId, position);
-    if (updatedRoot) {
-        tab.rootNode = updatedRoot;
-        activePaneId.value = sourceId; // Refocus the dragged pane
-    }
-}
-
-// Seeks the active pane's session ID to route snippet commands
-const activeSessionId = computed(() => {
-    const tab = activeTab.value;
-    if (!tab || !activePaneId.value) return null;
-    const found = findNode(tab.rootNode, activePaneId.value);
-    return found?.node.sessionId || null;
-});
-
-// Run predefined snippet command
-function runSnippet(cmd: string) {
-    const sessionId = activeSessionId.value;
-    if (sessionId) {
-        WriteToTerminal(sessionId, cmd + "\n").catch((err) => {
-            console.error("Failed to run snippet:", err);
-        });
-    }
-}
-
-// Edit tab naming
-function startRenameTab(tab: Tab) {
-    editingTabId.value = tab.id;
-    editingName.value = tab.name;
+// Edit tab naming helper to set focus
+function startRenameTab(tab: any) {
+    store.startRenameTab(tab);
     setTimeout(() => {
-        renameInputRef.value?.focus();
-        renameInputRef.value?.select();
+        if (renameInputRef.value && renameInputRef.value.length > 0) {
+            renameInputRef.value[0].focus();
+            renameInputRef.value[0].select();
+        }
     }, 50);
-}
-
-function saveRenameTab(tab: Tab) {
-    if (editingName.value.trim()) {
-        tab.name = editingName.value.trim();
-    }
-    editingTabId.value = null;
-}
-
-function cancelRenameTab() {
-    editingTabId.value = null;
 }
 
 // System stats poller
@@ -425,32 +41,32 @@ function handleGlobalKeyDown(e: KeyboardEvent) {
     // Ctrl+Shift+T: New Tab
     if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
         e.preventDefault();
-        addTab();
+        store.addTab();
     }
     // Ctrl+Shift+W: Close Current Tab
     else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "w") {
-        if (activeTabId.value) {
+        if (store.activeTabId) {
             e.preventDefault();
-            closeTab(activeTabId.value);
+            store.closeTab(store.activeTabId);
         }
     }
     // Ctrl+Shift+X: Toggle Maximize Pane
     else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "x") {
         e.preventDefault();
-        toggleMaximize();
+        store.toggleMaximize();
     }
     // Ctrl+Shift+E: Split Vertically (Right)
     else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
-        if (activePaneId.value) {
+        if (store.activePaneId) {
             e.preventDefault();
-            handleSplitPane(activePaneId.value, "vertical");
+            store.splitPane(store.activePaneId, "vertical");
         }
     }
     // Ctrl+Shift+O: Split Horizontally (Bottom)
     else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
-        if (activePaneId.value) {
+        if (store.activePaneId) {
             e.preventDefault();
-            handleSplitPane(activePaneId.value, "horizontal");
+            store.splitPane(store.activePaneId, "horizontal");
         }
     }
 }
@@ -459,10 +75,10 @@ async function fetchStats() {
     try {
         const data = await GetSystemStats();
         if (data) {
-            stats.value.cpu = Math.round(data.cpu);
-            stats.value.memory = Math.round(data.memory);
-            stats.value.memoryRaw = data.memoryRaw;
-            stats.value.uptime = data.uptime;
+            store.stats.cpu = Math.round(data.cpu);
+            store.stats.memory = Math.round(data.memory);
+            store.stats.memoryRaw = data.memoryRaw;
+            store.stats.uptime = data.uptime;
         }
     } catch (err) {
         console.error("Failed to poll system stats:", err);
@@ -470,7 +86,7 @@ async function fetchStats() {
 }
 
 onMounted(() => {
-    addTab();
+    store.addTab();
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
     window.addEventListener("keydown", handleGlobalKeyDown);
@@ -510,32 +126,17 @@ onBeforeUnmount(() => {
     <div
         :class="[
             'app-container',
-            themes[currentTheme].cssClass,
+            themes[store.currentTheme].cssClass,
             { 'is-maximised': isMaximised },
         ]"
     >
         <CustomTitleBar title="TermXP" />
         <div class="main-content">
-            <!-- Debug info - can be removed after check -->
-            <div
-                v-if="false"
-                style="
-                    position: absolute;
-                    top: 0;
-                    left: 0;
-                    z-index: 9999;
-                    background: red;
-                    color: white;
-                "
-            >
-                Tabs: {{ tabs.length }} | Active: {{ activeTabId }}
-            </div>
-
             <!-- Background glow design for glassmorphism -->
             <div class="bg-glow"></div>
 
             <!-- Sidebar Layout -->
-            <aside :class="['sidebar', { 'sidebar-closed': !sidebarOpen }]">
+            <aside :class="['sidebar', { 'sidebar-closed': !store.sidebarOpen }]">
                 <div class="sidebar-header">
                     <div class="logo-area">
                         <span class="logo-icon">🚀</span>
@@ -552,14 +153,12 @@ onBeforeUnmount(() => {
                             <div class="metric-card">
                                 <div class="metric-info">
                                     <span>App CPU</span>
-                                    <span class="metric-value"
-                                        >{{ stats.cpu }}%</span
-                                    >
+                                    <span class="metric-value">{{ store.stats.cpu }}%</span>
                                 </div>
                                 <div class="progress-bar-container">
                                     <div
                                         class="progress-bar cpu-bar"
-                                        :style="{ width: stats.cpu + '%' }"
+                                        :style="{ width: store.stats.cpu + '%' }"
                                     ></div>
                                 </div>
                             </div>
@@ -567,23 +166,19 @@ onBeforeUnmount(() => {
                             <div class="metric-card">
                                 <div class="metric-info">
                                     <span>App RAM</span>
-                                    <span class="metric-value">{{
-                                        stats.memoryRaw
-                                    }}</span>
+                                    <span class="metric-value">{{ store.stats.memoryRaw }}</span>
                                 </div>
                                 <div class="progress-bar-container">
                                     <div
                                         class="progress-bar memory-bar"
-                                        :style="{ width: stats.memory + '%' }"
+                                        :style="{ width: store.stats.memory + '%' }"
                                     ></div>
                                 </div>
                             </div>
 
                             <div class="metric-card single-metric">
                                 <span class="metric-label">Uptime:</span>
-                                <span class="metric-text font-mono">{{
-                                    stats.uptime
-                                }}</span>
+                                <span class="metric-text font-mono">{{ store.stats.uptime }}</span>
                             </div>
                         </div>
                     </section>
@@ -597,15 +192,14 @@ onBeforeUnmount(() => {
                                 :key="themeKey"
                                 :class="[
                                     'theme-btn',
-                                    { active: currentTheme === themeKey },
+                                    { active: store.currentTheme === themeKey },
                                 ]"
-                                @click="currentTheme = themeKey"
+                                @click="store.currentTheme = themeKey"
                             >
                                 <span
                                     class="theme-color-dot"
                                     :style="{
-                                        background:
-                                            themeConfig.xterm.background,
+                                        background: themeConfig.xterm.background,
                                     }"
                                 ></span>
                                 {{ themeConfig.name }}
@@ -618,7 +212,7 @@ onBeforeUnmount(() => {
                         <h3>Font Control</h3>
                         <div class="font-controls">
                             <button
-                                @click="fontSize = Math.max(10, fontSize - 1)"
+                                @click="store.fontSize = Math.max(10, store.fontSize - 1)"
                                 class="font-btn"
                             >
                                 <svg
@@ -632,9 +226,9 @@ onBeforeUnmount(() => {
                                     <line x1="5" y1="12" x2="19" y2="12"></line>
                                 </svg>
                             </button>
-                            <span class="font-display">{{ fontSize }}px</span>
+                            <span class="font-display">{{ store.fontSize }}px</span>
                             <button
-                                @click="fontSize = Math.min(24, fontSize + 1)"
+                                @click="store.fontSize = Math.min(24, store.fontSize + 1)"
                                 class="font-btn"
                             >
                                 <svg
@@ -660,8 +254,8 @@ onBeforeUnmount(() => {
                                 v-for="s in snippets"
                                 :key="s.label"
                                 class="snippet-btn"
-                                @click="runSnippet(s.cmd)"
-                                :disabled="!activeSessionId"
+                                @click="store.runSnippet(s.cmd)"
+                                :disabled="!store.getActiveSessionId()"
                                 :title="s.cmd"
                             >
                                 <span class="cmd-symbol">$</span>
@@ -680,7 +274,7 @@ onBeforeUnmount(() => {
                         <!-- Toggle sidebar button -->
                         <button
                             class="icon-toggle-btn"
-                            @click="sidebarOpen = !sidebarOpen"
+                            @click="store.sidebarOpen = !store.sidebarOpen"
                             title="Toggle Sidebar"
                         >
                             <svg
@@ -700,23 +294,23 @@ onBeforeUnmount(() => {
                         <!-- Tab list -->
                         <div class="tabs-list">
                             <div
-                                v-for="tab in tabs"
+                                v-for="tab in store.tabs"
                                 :key="tab.id"
                                 :class="[
                                     'tab-item',
-                                    { active: activeTabId === tab.id },
+                                    { active: store.activeTabId === tab.id },
                                 ]"
-                                @click="selectTab(tab.id)"
+                                @click="store.selectTab(tab.id)"
                             >
                                 <!-- Editing name input -->
                                 <input
-                                    v-if="editingTabId === tab.id"
+                                    v-if="store.editingTabId === tab.id"
                                     ref="renameInputRef"
                                     type="text"
-                                    v-model="editingName"
-                                    @blur="saveRenameTab(tab)"
-                                    @keydown.enter="saveRenameTab(tab)"
-                                    @keydown.esc="cancelRenameTab"
+                                    v-model="store.editingName"
+                                    @blur="store.saveRenameTab(tab)"
+                                    @keydown.enter="store.saveRenameTab(tab)"
+                                    @keydown.esc="store.cancelRenameTab"
                                     class="tab-rename-input"
                                 />
                                 <!-- Default text label -->
@@ -732,7 +326,7 @@ onBeforeUnmount(() => {
                                 <!-- Close button -->
                                 <button
                                     class="tab-close-btn"
-                                    @click.stop="closeTab(tab.id)"
+                                    @click.stop="store.closeTab(tab.id)"
                                 >
                                     <svg
                                         width="12"
@@ -742,18 +336,8 @@ onBeforeUnmount(() => {
                                         stroke="currentColor"
                                         stroke-width="2.5"
                                     >
-                                        <line
-                                            x1="18"
-                                            y1="6"
-                                            x2="6"
-                                            y2="18"
-                                        ></line>
-                                        <line
-                                            x1="6"
-                                            y1="6"
-                                            x2="18"
-                                            y2="18"
-                                        ></line>
+                                        <line x1="18" y1="6" x2="6" y2="18"></line>
+                                        <line x1="6" y1="6" x2="18" y2="18"></line>
                                     </svg>
                                 </button>
                             </div>
@@ -761,7 +345,7 @@ onBeforeUnmount(() => {
                             <!-- Add Tab Button -->
                             <button
                                 class="add-tab-btn"
-                                @click="addTab"
+                                @click="store.addTab"
                                 title="Open new shell session"
                             >
                                 <svg
@@ -785,26 +369,14 @@ onBeforeUnmount(() => {
                 <div class="terminal-workspace-container">
                     <!-- Render recursive split layouts for each tab. v-show keeps running terminals alive. -->
                     <TerminalLayout
-                        v-for="tab in tabs"
+                        v-for="tab in store.tabs"
                         :key="tab.id"
-                        v-show="activeTabId === tab.id"
+                        v-show="store.activeTabId === tab.id"
                         :node="tab.rootNode"
-                        :active-pane-id="activePaneId"
-                        :maximized-pane-id="maximizedPaneId"
-                        :theme="themes[currentTheme].xterm"
-                        :theme-class="themes[currentTheme].cssClass"
-                        :font-size="fontSize"
-                        @split-pane="handleSplitPane"
-                        @close-pane="handleClosePane"
-                        @pane-initialized="handlePaneInitialized"
-                        @focus-pane="(pId) => (activePaneId = pId)"
-                        @toggle-maximize="(pId) => toggleMaximize(pId)"
-                        @move-pane="handleMovePane"
-                        @update-sizes="handleUpdateSizes"
                     />
 
                     <!-- Empty state layout -->
-                    <div v-if="tabs.length === 0" class="empty-state">
+                    <div v-if="store.tabs.length === 0" class="empty-state">
                         <div class="empty-glow"></div>
                         <div class="empty-info">
                             <span class="empty-icon">📟</span>
@@ -813,7 +385,7 @@ onBeforeUnmount(() => {
                                 Spawns local terminal processes (e.g. bash) on
                                 your host machine to run CLI actions.
                             </p>
-                            <button @click="addTab" class="action-btn">
+                            <button @click="store.addTab" class="action-btn">
                                 <span>Start New Shell</span>
                             </button>
                         </div>

@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -12,17 +13,20 @@ import (
 
 // App struct
 type App struct {
-	ctx          context.Context
-	lastCPUTotal uint64
-	lastProcTime uint64
-	startTime    time.Time
-	mu           sync.Mutex
+	ctx       context.Context
+	collector MetricsCollector
 }
 
 // NewApp creates a new App application struct
 func NewApp() *App {
+	var collector MetricsCollector
+	if runtime.GOOS == "linux" {
+		collector = NewLinuxMetricsCollector()
+	} else {
+		collector = NewFallbackMetricsCollector()
+	}
 	return &App{
-		startTime: time.Now(),
+		collector: collector,
 	}
 }
 
@@ -34,28 +38,47 @@ func (a *App) startup(ctx context.Context) {
 
 // GetSystemStats fetches real-time CPU, RAM, and Uptime for the current process
 func (a *App) GetSystemStats() (map[string]interface{}, error) {
-	// Read Process RAM (RSS)
+	return a.collector.GetStats()
+}
+
+// MetricsCollector defines the interface for OS stats retrieval
+type MetricsCollector interface {
+	GetStats() (map[string]interface{}, error)
+}
+
+// LinuxMetricsCollector implements MetricsCollector for Linux systems via /proc
+type LinuxMetricsCollector struct {
+	startTime    time.Time
+	lastCPUTotal uint64
+	lastProcTime uint64
+	mu           sync.Mutex
+}
+
+// NewLinuxMetricsCollector creates a Linux stat collector
+func NewLinuxMetricsCollector() *LinuxMetricsCollector {
+	return &LinuxMetricsCollector{
+		startTime: time.Now(),
+	}
+}
+
+// GetStats retrieves stats on Linux
+func (l *LinuxMetricsCollector) GetStats() (map[string]interface{}, error) {
 	memRSS, err := readProcessMemory()
 	if err != nil {
 		memRSS = 0
 	}
-	// Convert RSS (KB) to a percentage of total system memory for the bar,
-	// or just return the MB value? The UI expects a percentage for the bar.
-	// Let's get total memory to calculate percentage.
 	memTotal, _, _ := readMemInfo()
 	memPercent := 0.0
 	if memTotal > 0 {
 		memPercent = (float64(memRSS) / float64(memTotal)) * 100.0
 	}
 
-	// Read Process CPU load
-	cpuPercent, err := a.calculateProcessCPULoad()
+	cpuPercent, err := l.calculateProcessCPULoad()
 	if err != nil {
 		cpuPercent = 0.0
 	}
 
-	// Get Process Uptime
-	uptimeStr := formatUptime(time.Since(a.startTime).Seconds())
+	uptimeStr := formatUptime(time.Since(l.startTime).Seconds())
 
 	return map[string]interface{}{
 		"cpu":       cpuPercent,
@@ -64,6 +87,53 @@ func (a *App) GetSystemStats() (map[string]interface{}, error) {
 		"uptime":    uptimeStr,
 	}, nil
 }
+
+func (l *LinuxMetricsCollector) calculateProcessCPULoad() (float64, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	proc2, total2, err := readProcessCPUStats()
+	if err != nil {
+		return 0, err
+	}
+
+	proc1, total1 := l.lastProcTime, l.lastCPUTotal
+	l.lastProcTime, l.lastCPUTotal = proc2, total2
+
+	if total1 == 0 || total2 <= total1 {
+		return 0, nil
+	}
+
+	totalDiff := float64(total2 - total1)
+	procDiff := float64(proc2 - proc1)
+
+	return (procDiff / totalDiff) * 100.0, nil
+}
+
+// FallbackMetricsCollector implements MetricsCollector for macOS/Windows
+type FallbackMetricsCollector struct {
+	startTime time.Time
+}
+
+// NewFallbackMetricsCollector creates a fallback stat collector
+func NewFallbackMetricsCollector() *FallbackMetricsCollector {
+	return &FallbackMetricsCollector{
+		startTime: time.Now(),
+	}
+}
+
+// GetStats retrieves stats for fallback systems
+func (f *FallbackMetricsCollector) GetStats() (map[string]interface{}, error) {
+	uptimeStr := formatUptime(time.Since(f.startTime).Seconds())
+	return map[string]interface{}{
+		"cpu":       0.0,
+		"memory":    0.0,
+		"memoryRaw": "0 MB",
+		"uptime":    uptimeStr,
+	}, nil
+}
+
+// Helper formatting and reading functions
 
 func formatMemory(kb uint64) string {
 	if kb < 1024*1024 {
@@ -91,13 +161,11 @@ func readProcessMemory() (rss uint64, err error) {
 }
 
 func readProcessCPUStats() (procTime uint64, totalTime uint64, err error) {
-	// Get total system time
 	_, totalTime, err = readCPUStats()
 	if err != nil {
 		return 0, 0, err
 	}
 
-	// Get process time (utime + stime)
 	data, err := os.ReadFile("/proc/self/stat")
 	if err != nil {
 		return 0, 0, err
@@ -112,29 +180,6 @@ func readProcessCPUStats() (procTime uint64, totalTime uint64, err error) {
 	_, _ = fmt.Sscanf(fields[14], "%d", &stime)
 
 	return utime + stime, totalTime, nil
-}
-
-func (a *App) calculateProcessCPULoad() (float64, error) {
-	a.mu.Lock()
-	defer a.mu.Unlock()
-
-	proc2, total2, err := readProcessCPUStats()
-	if err != nil {
-		return 0, err
-	}
-
-	proc1, total1 := a.lastProcTime, a.lastCPUTotal
-	a.lastProcTime, a.lastCPUTotal = proc2, total2
-
-	if total1 == 0 || total2 <= total1 {
-		return 0, nil
-	}
-
-	totalDiff := float64(total2 - total1)
-	procDiff := float64(proc2 - proc1)
-
-	// CPU percentage relative to total system capacity
-	return (procDiff / totalDiff) * 100.0, nil
 }
 
 func readMemInfo() (total, avail uint64, err error) {
