@@ -1,92 +1,112 @@
-# Roadmap: Migrating TermXP to a Frameless, Transparent Architecture
+TermXP — Final Feature Plan
+============================
+14 features · 4 milestones · ~4–6 weeks total
 
-This roadmap outlines the steps required to transition **TermXP** from a standard native window layout into a premium, frameless application featuring custom HTML/Vue window decorations and system-level transparency.
 
----
+MILESTONE 1 — Foundation fixes (~1–2 days)
+-------------------------------------------
+Do these first. Everything else depends on them.
 
-## 🗺️ Implementation Overview
+1. Settings persistence
+   Store theme, preferences, and future feature config in a JSON file via
+   the Wails runtime path. Add SaveConfig / LoadConfig Go methods.
+   Files: Go (app.go), Vue (App.vue)
 
-```
-+-------------------------------------------------------------+
-| [=] TermXP  (Custom Drag Zone Title Bar)          [-] [[]] [X] | -> Stage 3: Vue Window Controls
-+-------------------------------------------------------------+
-|                                                             |
-|   >_ Terminal Session Layer                                 | -> Stage 4: Layout & Fit Tuning
-|                                                             |
-|                                                             |
-+-------------------------------------------------------------+
- \___________________________________________________________/  -> Stage 2: Webview Corners & Filters
+2. Smarter shell detection
+   Scan /etc/shells and check $SHELL env var before falling back.
+   Fixes silent breakage on macOS (zsh default) and NixOS.
+   Files: Go (terminal.go)
 
-```
+3. Session reconnect on crash
+   When terminal:exit fires unexpectedly, show a "Reconnect" button in the
+   pane instead of leaving a dead terminal. Reuse the existing StartSession call.
+   Files: Go (terminal.go), Vue (TerminalInstance.vue)
 
----
 
-## 🛠️ Phase 1: Go Backend Configuration
+MILESTONE 2 — Daily driver polish (~1 week, features mostly independent)
+-------------------------------------------------------------------------
 
-*Goal: Remove native OS borders and configure the window subsystems to allow translucency layers.*
+4. Shell picker on startup
+   Dropdown in the new tab dialog, populated from the shell list detected
+   in step 2. Persist the default choice to config (step 1).
+   Depends on: 1, 2
+   Files: Go, Vue
 
-### 1. Update `main.go` Application Options
+5. Font size control
+   Pass fontSize to xterm constructor. Wire Ctrl+scroll and +/− UI controls.
+   Persist to config.
+   Depends on: 1
+   Files: Vue (TerminalInstance.vue), xterm
 
-Modify the initialization block for `options.App` to hand layout control over to the webview:
+6. Tab rename
+   Double-click a tab label to edit it inline. Store the custom name alongside
+   the session ID in the layout tree.
+   Files: Vue (App.vue)
 
-* **Enable Frameless Flag**: Set `Frameless: true` to strip standard native title bars and borders.
-* **Enable Translucency**: Set `WindowIsTranslucent: true`.
+7. Copy on select
+   Wire xterm's onSelectionChange event to auto-copy to clipboard.
+   Files: Vue (TerminalInstance.vue)
 
-### 2. Add Platform-Specific Tuning
+8. Working directory in tab label
+   Poll /proc/<pid>/cwd (Linux) or lsof (macOS) from Go every few seconds,
+   emit via Wails event, display in the tab alongside the custom name.
+   Depends on: 6
+   Files: Go (terminal.go), Vue
 
-Configure native backdrop engines within `options.App` for smooth rendering:
+9. Scrollback search
+   Load @xterm/addon-search. Ctrl+F opens a floating bar with match
+   highlighting and forward/back navigation. No Go changes needed.
+   Files: Vue (TerminalInstance.vue), @xterm/addon-search
 
-* **Windows Subsystem**: Populate `windows.Options` with `WebviewIsTransparent: true` and set `BackdropType` to `windows.Mica` (or `windows.Acrylic`).
-* **macOS Subsystem**: Populate `mac.Options` utilizing `mac.TitleBarHiddenOrTransparent()` alongside `WebviewIsTransparent: true`.
 
----
+MILESTONE 3 — Workspace features (~1–2 weeks, sequential)
+----------------------------------------------------------
 
-## 🎨 Phase 2: Core CSS Layout & Geometry
+10. Session logging
+    Add a LogSession(id, path string) Go method that tees PTY output to a
+    file via the existing readLoop. Per-pane toggle in the UI.
+    Files: Go (terminal.go), Vue
 
-*Goal: Prevent default HTML boundaries from breaking webview opacity and set up application framing.*
+11. Layout save and restore
+    Serialize the layout.ts tree (splits, tab names, shell paths, cwds) to
+    config JSON on close. Offer to restore on startup. Add SaveLayout /
+    LoadLayout Go method pair.
+    Depends on: 1, 6, 8
+    Files: Go, Vue (layout.ts)
 
-### 1. Root & HTML Level Overrides (`frontend/src/style.css`)
+12. Pane broadcast (sync input)
+    A toolbar toggle. When active, keystrokes are written to all session IDs
+    in the layout tree via WriteToTerminal, not just the focused pane.
+    Pure frontend — no new Go needed.
+    Depends on: 11 (best after layout is stable)
+    Files: Vue (App.vue)
 
-* Force `html` and `body` backgrounds to `transparent !important` to let the OS-level backdrop filter shine through.
-* Lock overflow to `hidden` to suppress unnecessary native window scrollbars.
 
-### 2. Set Up the Outer Wrapper Application Layer
+MILESTONE 4 — Power features (~2–3 weeks, one new Go service)
+-------------------------------------------------------------
 
-* Target `#app` to stretch exactly `100vw` and `100vh` using a flex direction of `column`.
-* Apply a modern border radius (e.g., `border-radius: 12px`) and set `overflow: hidden` to neatly clip child components to the rounded window bounds.
-* **Glassmorphic Theme Check**: Update variables within your theme configurations to use alpha-channel values (`rgba`) and `backdrop-filter: blur()` instead of solid hex codes.
+13. Command palette
+    Ctrl+P opens a fuzzy-search overlay listing all actions: new tab,
+    split right/below, switch theme, connect SSH, toggle broadcast, run snippet.
+    Static action registry in Vue; actions call existing Wails bindings.
+    Best after steps 11 and 14 are stable.
+    Files: Vue (new component)
 
----
+14. SSH profile manager
+    New SSHService in Go storing profiles (host, user, key path, jump host)
+    in the config file. Connecting spawns a PTY session running:
+      ssh -i <key> <user>@<host>
+    No SSH library needed. Vue sidebar panel lists and launches profiles.
+    Depends on: 1, 2, 4
+    Files: Go (new ssh.go service), Vue (new sidebar component)
 
-## 🧩 Phase 3: Custom Title Bar & Control Handlers (Vue 3)
 
-*Goal: Replace the lost native OS dragging features and close/minimize/maximize buttons.*
+KEY DEPENDENCY NOTE
+-------------------
+Settings persistence (step 1) must land before anything else.
+Steps 4, 5, 11, and 14 all write to config — doing it once cleanly
+means every subsequent feature gets persistence for free.
 
-### 1. Create a `CustomTitleBar.vue` Component
-
-* **Implement Drag Zone**: Add the inline style attribute `style="--wails-drag-zone: drag"` to the header container element. This tells the Wails platform architecture which area should move the native window.
-* **Implement Interactive Safe Zones**: Ensure any button or interactive element inside the header explicitly declares `style="--wails-drag-zone: no-drag"`. This prevents dragging logic from swallowing user mouse clicks.
-
-### 2. Wire Up Window Lifecycle Actions
-
-Import runtime hooks directly from the Wails runtime framework:
-
-* Bind your UI minimize icon trigger to call `WindowMinimise()`.
-* Bind your UI maximize icon trigger to call `WindowToggleMaximise()`.
-* Bind your UI close icon trigger to call `Quit()`.
-
----
-
-## 📐 Phase 4: Layout Calculations & Edge Cases
-
-*Goal: Polish interactions so that dynamic resizing doesn't break terminal terminal scaling.*
-
-### 1. Handle Window Maximization Adjustments
-
-* **The Problem**: When a window maximizes, a rounded corner (`border-radius: 12px`) leaves awkward screen gaps at the corners of the monitor.
-* **The Fix**: Listen to the Wails event engine using `WindowIsMaximised()`. Bind a dynamic reactive class to the `#app` frame component to strip the `border-radius` and outer borders cleanly whenever the application is full-screen.
-
-### 2. Recalculate Terminal Fit Layouts
-
-* **The Problem**: Introducing a custom title bar shifts the height available for terminal outputs, which can cut off lines or cause overflow issues.
-* **The Fix**: Ensure that any logic utilizing `@xterm/addon-fit` within terminal layout files is triggered *after* the custom title bar finishes rendering to prevent text calculation mismatches.
+Only one genuinely new Go service is introduced in the entire plan
+(SSH profile manager, step 14). Everything else extends terminal.go
+or app.go, or lives entirely in the Vue frontend.
