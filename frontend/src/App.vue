@@ -1,8 +1,8 @@
 <script lang="ts" setup>
-import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, watch } from "vue";
 import TerminalLayout from "./components/TerminalLayout.vue";
 import CustomTitleBar from "./components/CustomTitleBar.vue";
-import { GetSystemStats } from "../wailsjs/go/main/App";
+import { GetSystemStats, LoadConfig, SaveConfig } from "../wailsjs/go/main/App";
 import {
     EventsOn,
     WindowIsMaximised,
@@ -11,6 +11,7 @@ import { store, themes } from "./utils/store";
 
 const isMaximised = ref<boolean>(false);
 const renameInputRef = ref<HTMLInputElement[]>([]);
+const configLoaded = ref<boolean>(false);
 
 // Command snippets list
 const snippets = [
@@ -85,7 +86,23 @@ async function fetchStats() {
     }
 }
 
-onMounted(() => {
+onMounted(async () => {
+    try {
+        const config = await LoadConfig();
+        if (config) {
+            if (config.theme) {
+                store.currentTheme = config.theme;
+            }
+            if (config.fontSize) {
+                store.fontSize = Number(config.fontSize);
+            }
+        }
+    } catch (err) {
+        console.error("Failed to load config:", err);
+    } finally {
+        configLoaded.value = true;
+    }
+
     store.addTab();
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
@@ -113,6 +130,21 @@ onMounted(() => {
         console.warn("Wails runtime not fully available yet:", err);
     }
 });
+
+watch(
+    [() => store.currentTheme, () => store.fontSize],
+    async () => {
+        if (!configLoaded.value) return;
+        try {
+            await SaveConfig({
+                theme: store.currentTheme,
+                fontSize: store.fontSize,
+            });
+        } catch (err) {
+            console.error("Failed to save config:", err);
+        }
+    }
+);
 
 onBeforeUnmount(() => {
     if (statsInterval) {
