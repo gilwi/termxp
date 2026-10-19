@@ -1,394 +1,208 @@
 import { reactive } from "vue";
-import { Terminal } from "@xterm/xterm";
-import { FitAddon } from "@xterm/addon-fit";
+import type { main } from "../../wailsjs/go/models";
 import {
-    PaneNode,
-    createTerminalNode,
-    findNode,
-    removeNode,
-    splitNode,
-    moveNode,
+  PaneNode,
+  Position,
+  TerminalNode,
+  createTerminalNode,
+  findNode,
+  generateUUID,
+  terminals,
+  removeNode,
+  splitNode,
+  moveNode,
 } from "./layout";
-import {
-    WriteToTerminal,
-    KillSession,
-} from "../../wailsjs/go/main/TerminalService";
-import { EventsOff } from "../../wailsjs/runtime/runtime";
-
-export const themes: Record<string, { name: string; cssClass: string; xterm: any }> = {
-    glassmorphic: {
-        name: "Glassmorphic",
-        cssClass: "theme-glassmorphic",
-        xterm: {
-            background: "rgba(14, 10, 30, 0.4)",
-            foreground: "#f1f5f9",
-            cursor: "#9333ea",
-            selectionBackground: "rgba(255, 255, 255, 0.1)",
-            black: "#0f0a1e",
-            red: "#f43f5e",
-            green: "#10b981",
-            yellow: "#fbbf24",
-            blue: "#3b82f6",
-            magenta: "#a855f7",
-            cyan: "#06b6d4",
-            white: "#f1f5f9",
-        },
-    },
-    cyberpunk: {
-        name: "Cyberpunk",
-        cssClass: "theme-cyberpunk",
-        xterm: {
-            background: "#040408",
-            foreground: "#00ffcc",
-            cursor: "#ff007f",
-            selectionBackground: "rgba(255, 0, 127, 0.3)",
-            black: "#07070e",
-            red: "#ff0055",
-            green: "#00ffcc",
-            yellow: "#ffe600",
-            blue: "#0066ff",
-            magenta: "#ff00ff",
-            cyan: "#00ffff",
-            white: "#ffffff",
-        },
-    },
-    dracula: {
-        name: "Dracula",
-        cssClass: "theme-dracula",
-        xterm: {
-            background: "#282a36",
-            foreground: "#f8f8f2",
-            cursor: "#ff79c6",
-            selectionBackground: "rgba(255, 255, 255, 0.1)",
-            black: "#1e1f29",
-            red: "#ff5555",
-            green: "#50fa7b",
-            yellow: "#f1fa8c",
-            blue: "#bd93f9",
-            magenta: "#ff79c6",
-            cyan: "#8be9fd",
-            white: "#f8f8f2",
-        },
-    },
-    matrix: {
-        name: "Matrix",
-        cssClass: "theme-matrix",
-        xterm: {
-            background: "#000000",
-            foreground: "#00ff00",
-            cursor: "#00ff00",
-            selectionBackground: "rgba(0, 255, 0, 0.25)",
-            black: "#000000",
-            red: "#005500",
-            green: "#00ff00",
-            yellow: "#33cc33",
-            blue: "#009900",
-            magenta: "#00ff00",
-            cyan: "#00ff00",
-            white: "#55ff55",
-        },
-    },
-    monokai: {
-        name: "Monokai",
-        cssClass: "theme-monokai",
-        xterm: {
-            background: "#272822",
-            foreground: "#f8f8f2",
-            cursor: "#f92672",
-            selectionBackground: "rgba(255, 255, 255, 0.1)",
-            black: "#1e1e1e",
-            red: "#f92672",
-            green: "#a6e22e",
-            yellow: "#f4bf75",
-            blue: "#66d9ef",
-            magenta: "#ae81ff",
-            cyan: "#a1efe4",
-            white: "#f8f8f2",
-        },
-    },
-};
-
+import { configureInputRouter, disposeSession, sessions } from "./sessions";
+export { themes } from "./themes";
 export interface Tab {
-    id: string;
-    name: string;
-    rootNode: PaneNode;
+  id: string;
+  name: string;
+  rootNode: PaneNode;
 }
-
-export interface CachedTerminal {
-    term: Terminal;
-    fitAddon: FitAddon;
-    containerWrapper: HTMLDivElement;
-    initialized: boolean;
-    sId: string;
-}
-
-// Global cache for xterm.js instances managed inside the store module
-export const instanceCache = new Map<string, CachedTerminal>();
-
-export function disposeCachedTerminal(paneId: string) {
-    const cached = instanceCache.get(paneId);
-    if (cached) {
-        if (cached.sId) {
-            EventsOff(`terminal:data:${cached.sId}`);
-        }
-        cached.term.dispose();
-        instanceCache.delete(paneId);
-    }
-}
-
-// Cryptographic UUID generator for client-side session and pane IDs
-export function generateUUID(): string {
-    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
-        return crypto.randomUUID();
-    }
-    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
-        const r = (Math.random() * 16) | 0;
-        const v = c === 'x' ? r : (r & 0x3) | 0x8;
-        return v.toString(16);
-    });
-}
-
 export const store = reactive({
-    tabs: [] as Tab[],
-    activeTabId: "",
-    activePaneId: "",
-    maximizedPaneId: null as string | null,
-    currentTheme: "glassmorphic",
-    fontSize: 14,
-    sidebarOpen: false,
-    editingTabId: null as string | null,
-    editingName: "",
-
-    stats: {
-        cpu: 0,
-        memory: 0,
-        memoryRaw: "0 MB",
-        uptime: "0m",
-    },
-
-    // Getters
-    getActiveTab(): Tab | null {
-        return this.tabs.find((t) => t.id === this.activeTabId) || null;
-    },
-
-    getActiveSessionId(): string | null {
-        const tab = this.getActiveTab();
-        if (!tab || !this.activePaneId) return null;
-        const found = findNode(tab.rootNode, this.activePaneId);
-        return found?.node.sessionId || null;
-    },
-
-    // Actions
-    addTab() {
-        const id = generateUUID();
-        const rootPaneId = `pane-${generateUUID()}`;
-        const index = this.tabs.length + 1;
-        const newTab: Tab = {
-            id,
-            name: `Shell ${index}`,
-            rootNode: createTerminalNode(rootPaneId, ""),
-        };
-        this.tabs.push(newTab);
-        this.activeTabId = id;
-        this.activePaneId = rootPaneId;
-    },
-
-    selectTab(id: string) {
-        this.activeTabId = id;
-        const tab = this.tabs.find((t) => t.id === id);
-        if (tab) {
-            // Reset maximized pane if it belonged to another tab to avoid blank screens
-            if (this.maximizedPaneId && !findNode(tab.rootNode, this.maximizedPaneId)) {
-                this.maximizedPaneId = null;
-            }
-            const firstTerm = getFirstTerminalNode(tab.rootNode);
-            if (firstTerm) {
-                this.activePaneId = firstTerm.id;
-            }
-        }
-    },
-
-    closeTab(id: string) {
-        const index = this.tabs.findIndex((t) => t.id === id);
-        if (index === -1) return;
-
-        const tabToClose = this.tabs[index];
-        this.killSessionsInNode(tabToClose.rootNode);
-
-        if (this.maximizedPaneId && findNode(tabToClose.rootNode, this.maximizedPaneId)) {
-            this.maximizedPaneId = null;
-        }
-
-        this.tabs.splice(index, 1);
-
-        if (this.activeTabId === id) {
-            if (this.tabs.length > 0) {
-                const nextActiveIndex = Math.min(index, this.tabs.length - 1);
-                this.selectTab(this.tabs[nextActiveIndex].id);
-            } else {
-                this.activeTabId = "";
-                this.activePaneId = "";
-            }
-        }
-    },
-
-    splitPane(paneId: string, orientation: "horizontal" | "vertical") {
-        const tab = this.getActiveTab();
-        if (!tab) return;
-
-        const newPaneId = `pane-${generateUUID()}`;
-        tab.rootNode = splitNode(tab.rootNode, paneId, newPaneId, orientation);
-        this.activePaneId = newPaneId;
-    },
-
-    closePane(paneId: string) {
-        // Find the tab that actually owns this pane, even if it's currently inactive
-        for (const t of this.tabs) {
-            const found = findNode(t.rootNode, paneId);
-            if (found) {
-                this.performClosePane(t, paneId);
-                return;
-            }
-        }
-    },
-
-    performClosePane(tab: Tab, paneId: string) {
-        if (this.maximizedPaneId === paneId) {
-            this.maximizedPaneId = null;
-        }
-
-        if (tab.rootNode.type === "terminal" && tab.rootNode.id === paneId) {
-            this.closeTab(tab.id);
-            return;
-        }
-
-        const found = findNode(tab.rootNode, paneId);
-        if (found && found.node.sessionId) {
-            EventsOff(`terminal:exit:${found.node.sessionId}`);
-            KillSession(found.node.sessionId).catch((err) => {
-                console.error("Failed to kill session:", err);
-            });
-        }
-
-        disposeCachedTerminal(paneId);
-
-        const updatedRoot = removeNode(tab.rootNode, paneId);
-        if (updatedRoot) {
-            if (countTerminals(updatedRoot) === 0) {
-                this.closeTab(tab.id);
-                return;
-            }
-            tab.rootNode = updatedRoot;
-
-            if (tab.id === this.activeTabId) {
-                const firstTerm = getFirstTerminalNode(updatedRoot);
-                if (firstTerm) {
-                    this.activePaneId = firstTerm.id;
-                }
-            }
-        }
-    },
-
-    paneInitialized(paneId: string, sessionId: string) {
-        for (const t of this.tabs) {
-            const found = findNode(t.rootNode, paneId);
-            if (found) {
-                found.node.sessionId = sessionId;
-                break;
-            }
-        }
-    },
-
-    updateSizes(nodeId: string, newSizes: number[]) {
-        const tab = this.getActiveTab();
-        if (!tab) return;
-        const found = findNode(tab.rootNode, nodeId);
-        if (found) {
-            found.node.sizes = newSizes;
-        }
-    },
-
-    toggleMaximize(paneId?: string) {
-        if (this.maximizedPaneId) {
-            this.maximizedPaneId = null;
-        } else {
-            const targetId = paneId || this.activePaneId;
-            if (targetId) {
-                this.maximizedPaneId = targetId;
-            }
-        }
-    },
-
-    movePane(sourceId: string, targetId: string, position: "left" | "right" | "top" | "bottom" | "swap") {
-        const tab = this.getActiveTab();
-        if (!tab) return;
-
-        const updatedRoot = moveNode(tab.rootNode, sourceId, targetId, position);
-        if (updatedRoot) {
-            tab.rootNode = updatedRoot;
-            this.activePaneId = sourceId;
-        }
-    },
-
-    runSnippet(cmd: string) {
-        const sessionId = this.getActiveSessionId();
-        if (sessionId) {
-            WriteToTerminal(sessionId, cmd + "\n").catch((err) => {
-                console.error("Failed to run snippet:", err);
-            });
-        }
-    },
-
-    startRenameTab(tab: Tab) {
-        this.editingTabId = tab.id;
-        this.editingName = tab.name;
-    },
-
-    saveRenameTab(tab: Tab) {
-        if (this.editingName.trim()) {
-            tab.name = this.editingName.trim();
-        }
-        this.editingTabId = null;
-    },
-
-    cancelRenameTab() {
-        this.editingTabId = null;
-    },
-
-    // Session helpers
-    killSessionsInNode(node: PaneNode) {
-        if (node.type === "terminal") {
-            if (node.sessionId) {
-                EventsOff(`terminal:exit:${node.sessionId}`);
-                KillSession(node.sessionId).catch((err) => {
-                    console.error("Failed to kill session:", err);
-                });
-            }
-            disposeCachedTerminal(node.id);
-        } else if (node.type === "split" && node.children) {
-            for (const child of node.children) {
-                this.killSessionsInNode(child);
-            }
-        }
+  tabs: [] as Tab[],
+  activeTabId: "",
+  activePaneId: "",
+  maximizedPaneId: null as string | null,
+  currentTheme: "glassmorphic",
+  fontSize: 14,
+  defaultShell: "",
+  shells: [] as string[],
+  copyOnSelect: false,
+  restoreWorkspace: true,
+  sshProfiles: [] as main.SSHProfile[],
+  sidebarOpen: false,
+  editingTabId: null as string | null,
+  editingName: "",
+  broadcast: false,
+  paletteOpen: false,
+  notice: "",
+  ready: false,
+  stats: {
+    cpu: null as number | null,
+    memory: null as number | null,
+    memoryRaw: "Unavailable",
+    uptime: "0m",
+  },
+  getActiveTab(): Tab | null {
+    return this.tabs.find((t) => t.id === this.activeTabId) || null;
+  },
+  getActiveNode(): TerminalNode | null {
+    const tab = this.getActiveTab();
+    const node = tab ? findNode(tab.rootNode, this.activePaneId)?.node : null;
+    return node?.type === "terminal" ? node : null;
+  },
+  getActiveSessionId(): string | null {
+    const controller = sessions.get(this.activePaneId)?.controller;
+    return controller?.state.status === "running" ? controller.sessionId : null;
+  },
+  addTab(ssh?: main.SSHProfile) {
+    if (
+      this.tabs.reduce((count, t) => count + terminals(t.rootNode).length, 0) >=
+      64
+    ) {
+      this.notice = "Workspace limit reached (64 terminals)";
+      return;
     }
+    const root = createTerminalNode(generateUUID(), this.defaultShell);
+    if (ssh) root.ssh = ssh;
+    const tab = {
+      id: generateUUID(),
+      name: ssh?.name || `Shell ${this.tabs.length + 1}`,
+      rootNode: root,
+    };
+    this.tabs.push(tab);
+    this.selectTab(tab.id);
+  },
+  selectTab(id: string) {
+    const tab = this.tabs.find((t) => t.id === id);
+    if (!tab) return;
+    this.activeTabId = id;
+    if (!findNode(tab.rootNode, this.activePaneId))
+      this.activePaneId = terminals(tab.rootNode)[0]?.id || "";
+    if (this.maximizedPaneId && !findNode(tab.rootNode, this.maximizedPaneId))
+      this.maximizedPaneId = null;
+    this.broadcast = false;
+  },
+  closeTab(id: string) {
+    const index = this.tabs.findIndex((t) => t.id === id);
+    if (index < 0) return;
+    terminals(this.tabs[index].rootNode).forEach((node) =>
+      disposeSession(node.id),
+    );
+    this.tabs.splice(index, 1);
+    this.broadcast = false;
+    if (this.activeTabId === id) {
+      const next = this.tabs[Math.min(index, this.tabs.length - 1)];
+      if (next) this.selectTab(next.id);
+      else {
+        this.activeTabId = "";
+        this.activePaneId = "";
+        this.maximizedPaneId = null;
+      }
+    }
+  },
+  closePane(id: string) {
+    const tab = this.tabs.find((t) => findNode(t.rootNode, id));
+    if (!tab) return;
+    if (tab.rootNode.id === id) {
+      this.closeTab(tab.id);
+      return;
+    }
+    disposeSession(id);
+    const root = removeNode(tab.rootNode, id);
+    if (!root) {
+      this.closeTab(tab.id);
+      return;
+    }
+    tab.rootNode = root;
+    this.broadcast = false;
+    if (this.maximizedPaneId === id) this.maximizedPaneId = null;
+    if (this.activePaneId === id)
+      this.activePaneId = terminals(root)[0]?.id || "";
+  },
+  splitPane(id: string, orientation: "horizontal" | "vertical") {
+    const tab = this.tabs.find((t) => findNode(t.rootNode, id));
+    if (!tab) return;
+    if (
+      this.tabs.reduce((count, t) => count + terminals(t.rootNode).length, 0) >=
+      64
+    ) {
+      this.notice = "Workspace limit reached (64 terminals)";
+      return;
+    }
+    const depth = (n: PaneNode, level = 0): number =>
+      n.id === id
+        ? level
+        : n.type === "split"
+          ? Math.max(-1, ...n.children.map((c) => depth(c, level + 1)))
+          : -1;
+    if (depth(tab.rootNode) >= 16) {
+      this.notice = "Split nesting limit reached (16)";
+      return;
+    }
+    const newId = generateUUID();
+    tab.rootNode = splitNode(
+      tab.rootNode,
+      id,
+      newId,
+      orientation,
+      this.defaultShell,
+    );
+    this.activePaneId = newId;
+    this.maximizedPaneId = null;
+    this.broadcast = false;
+  },
+  movePane(source: string, target: string, position: Position) {
+    const tab = this.getActiveTab();
+    if (!tab) return;
+    const root = moveNode(tab.rootNode, source, target, position);
+    const depth = (node: PaneNode): number => node.type === "terminal" ? 0 : 1 + Math.max(...node.children.map(depth));
+    if (depth(root) > 16) { this.notice = "Split nesting limit reached (16)"; return; }
+    tab.rootNode = root;
+    this.activePaneId = source;
+  },
+  updateSizes(id: string, sizes: number[]) {
+    const tab = this.tabs.find((t) => findNode(t.rootNode, id));
+    const node = tab && findNode(tab.rootNode, id)?.node;
+    if (node?.type === "split") node.sizes = sizes;
+  },
+  toggleMaximize(id?: string) {
+    this.maximizedPaneId = this.maximizedPaneId
+      ? null
+      : id || this.activePaneId;
+  },
+  runSnippet(command: string) {
+    sessions.get(this.activePaneId)?.controller.send(command + "\n");
+  },
+  startRenameTab(tab: Tab) {
+    this.editingTabId = tab.id;
+    this.editingName = tab.name;
+  },
+  saveRenameTab(tab: Tab) {
+    if (this.editingName.trim())
+      tab.name = this.editingName.trim().slice(0, 256);
+    this.editingTabId = null;
+  },
+  cancelRenameTab() {
+    this.editingTabId = null;
+  },
+  tabDirectory(tab: Tab): string {
+    const node =
+      terminals(tab.rootNode).find((n) => n.id === this.activePaneId) ||
+      terminals(tab.rootNode)[0];
+    return node ? sessions.get(node.id)?.controller.state.cwd || node.cwd : "";
+  },
 });
-
-// Traversal helper functions
-function getFirstTerminalNode(node: PaneNode): PaneNode | null {
-    if (node.type === "terminal") return node;
-    if (node.type === "split" && node.children && node.children.length > 0) {
-        return getFirstTerminalNode(node.children[0]);
-    }
-    return null;
-}
-
-function countTerminals(node: PaneNode): number {
-    if (node.type === "terminal") return 1;
-    if (node.type === "split" && node.children) {
-        return node.children.reduce(
-            (sum, child) => sum + countTerminals(child),
-            0,
-        );
-    }
-    return 0;
-}
+configureInputRouter((source, data) => {
+  const tab = store.getActiveTab();
+  // Broadcast is limited to the selected tab, and only originates in that tab.
+  const targets = tab
+    ? terminals(tab.rootNode)
+        .map((n) => sessions.get(n.id)?.controller)
+        .filter((c) => c?.state.status === "running")
+    : [];
+  if (store.broadcast && targets.includes(source))
+    targets.forEach((c) => c?.send(data));
+  else source.send(data);
+});
