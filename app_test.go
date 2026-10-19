@@ -15,7 +15,7 @@ func TestFormatMemory(t *testing.T) {
 		{1024 * 100, "100 MB"},
 		{1024 * 1024, "1.0 GB"},
 		{1024 * 1024 * 2, "2.0 GB"},
-		{1024 * 1024 * 3 + 512*1024, "3.5 GB"},
+		{1024*1024*3 + 512*1024, "3.5 GB"},
 	}
 
 	for _, tt := range tests {
@@ -54,17 +54,11 @@ func TestFallbackMetricsCollector(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if stats["cpu"] != 0.0 {
-		t.Errorf("expected cpu 0.0, got %v", stats["cpu"])
+	if stats.CPU != nil || stats.Memory != nil || stats.MemoryRaw != "Unavailable" {
+		t.Fatalf("fallback metrics must report unavailable: %+v", stats)
 	}
-	if stats["memory"] != 0.0 {
-		t.Errorf("expected memory 0.0, got %v", stats["memory"])
-	}
-	if stats["memoryRaw"] != "0 MB" {
-		t.Errorf("expected memoryRaw '0 MB', got %v", stats["memoryRaw"])
-	}
-	if !strings.Contains(stats["uptime"].(string), "m") {
-		t.Errorf("expected uptime string with 'm', got %v", stats["uptime"])
+	if !strings.Contains(stats.Uptime, "m") {
+		t.Fatalf("invalid uptime: %s", stats.Uptime)
 	}
 }
 
@@ -72,23 +66,13 @@ func TestProcStatParsingWithSpacesInComm(t *testing.T) {
 	// Sample stat line where binary comm contains parentheses and spaces
 	raw := "12345 (termxp pro (dev)) S 100 12345 12345 0 -1 4194304 100 0 0 0 450 150 0 0 20 0 1 0"
 
-	lastParen := strings.LastIndex(raw, ")")
-	if lastParen == -1 {
-		t.Fatalf("expected last paren")
+	proc, total, err := parseProcessCPUStats(raw, 1000)
+	if err != nil || proc != 600 || total != 1000 {
+		t.Fatalf("parse = %d %d %v", proc, total, err)
 	}
-
-	fields := strings.Fields(raw[lastParen+1:])
-	if len(fields) < 13 {
-		t.Fatalf("expected at least 13 fields, got %d", len(fields))
-	}
-
-	if fields[0] != "S" {
-		t.Errorf("expected state 'S', got %s", fields[0])
-	}
-	if fields[11] != "450" {
-		t.Errorf("expected utime '450', got %s", fields[11])
-	}
-	if fields[12] != "150" {
-		t.Errorf("expected stime '150', got %s", fields[12])
+	for _, invalid := range []string{"", "123 (broken", "123 (x) S", strings.Replace(raw, "450", "invalid", 1)} {
+		if _, _, err := parseProcessCPUStats(invalid, 1000); err == nil {
+			t.Errorf("accepted invalid stat: %q", invalid)
+		}
 	}
 }
