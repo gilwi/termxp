@@ -72,7 +72,7 @@ const layoutContainer = ref<HTMLDivElement | null>(null);
 
 function startResize(e: MouseEvent, index: number) {
     e.preventDefault();
-    if (!props.node.children || !props.node.sizes || !layoutContainer.value)
+    if (props.node.type !== "split" || !layoutContainer.value)
         return;
 
     activeSplitterIndex = index;
@@ -92,7 +92,7 @@ function startResize(e: MouseEvent, index: number) {
 }
 
 function onResizeDrag(e: MouseEvent) {
-    if (activeSplitterIndex === -1 || !props.node.sizes) return;
+    if (activeSplitterIndex === -1 || props.node.type !== "split") return;
 
     const isVertical = props.node.orientation === "vertical";
     const currentPos = isVertical ? e.clientX : e.clientY;
@@ -382,13 +382,11 @@ function onDrop(
         <!-- Terminal component -->
         <div class="pane-body">
             <TerminalInstance
-                :pane-id="node.id"
-                :session-id="node.sessionId"
+                :key="node.id"
+                :node="node"
                 :theme="theme"
                 :fontSize="fontSize"
                 :active="activePaneId === node.id"
-                @exit="store.closePane(node.id)"
-                @initialized="(sId) => store.paneInitialized(node.id, sId)"
             />
         </div>
 
