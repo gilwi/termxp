@@ -32,10 +32,10 @@ func main() {
 		BackgroundColour: &options.RGBA{R: 15, G: 15, B: 20, A: 0},
 		OnStartup: func(ctx context.Context) {
 			app.startup(ctx)
-			terminalService.SetContext(ctx)
+			terminalService.setContext(ctx)
 		},
 		OnShutdown: func(ctx context.Context) {
-			terminalService.CleanupAllSessions()
+			terminalService.cleanupAllSessions()
 		},
 		Bind: []interface{}{
 			app,

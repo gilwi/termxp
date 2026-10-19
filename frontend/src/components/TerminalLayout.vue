@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, computed } from "vue";
+import { ref, computed, onBeforeUnmount } from "vue";
 import TerminalInstance from "./TerminalInstance.vue";
 import { PaneNode, findNode } from "../utils/layout";
 import { store, themes } from "../utils/store";
@@ -138,6 +138,8 @@ const contextMenuVisible = ref(false);
 const contextMenuX = ref(0);
 const contextMenuY = ref(0);
 
+let contextMenuTimer: number | null = null;
+
 function showContextMenu(e: MouseEvent) {
     e.preventDefault();
     store.activePaneId = props.node.id;
@@ -146,8 +148,12 @@ function showContextMenu(e: MouseEvent) {
     contextMenuY.value = e.clientY;
     contextMenuVisible.value = true;
 
+    if (contextMenuTimer) {
+        clearTimeout(contextMenuTimer);
+    }
     // Listen to click events to close the context menu
-    setTimeout(() => {
+    contextMenuTimer = window.setTimeout(() => {
+        contextMenuTimer = null;
         document.addEventListener("click", closeContextMenu);
         document.addEventListener("contextmenu", handleGlobalContextMenu);
     }, 10);
@@ -155,6 +161,10 @@ function showContextMenu(e: MouseEvent) {
 
 function closeContextMenu() {
     contextMenuVisible.value = false;
+    if (contextMenuTimer) {
+        clearTimeout(contextMenuTimer);
+        contextMenuTimer = null;
+    }
     document.removeEventListener("click", closeContextMenu);
     document.removeEventListener("contextmenu", handleGlobalContextMenu);
 }
@@ -162,6 +172,11 @@ function closeContextMenu() {
 function handleGlobalContextMenu(e: MouseEvent) {
     closeContextMenu();
 }
+
+onBeforeUnmount(() => {
+    endResize();
+    closeContextMenu();
+});
 
 function onHeaderDragStart(e: DragEvent) {
     if (props.node.type === "terminal" && e.dataTransfer) {

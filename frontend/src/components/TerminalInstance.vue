@@ -50,6 +50,8 @@ let term: Terminal | null = null;
 let fitAddon: FitAddon | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let localWrapper: HTMLDivElement | null = null;
+let initTimer: number | null = null;
+let isMountedRef = true;
 
 function safeFit(): boolean {
     if (!fitAddon || !term || !terminalContainer.value) return false;
@@ -127,8 +129,11 @@ onMounted(async () => {
             if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "v") {
                 if (e.type === "keydown" && !e.repeat) {
                     navigator.clipboard.readText().then((text) => {
-                        const sId = currentSessionId.value;
-                        if (text && sId) WriteToTerminal(sId, text);
+                        if (text && term) {
+                            term.paste(text);
+                        }
+                    }).catch((err) => {
+                        console.warn("Clipboard paste failed:", err);
                     });
                 }
                 e.preventDefault();
@@ -154,8 +159,9 @@ onMounted(async () => {
             sId: "",
         });
 
-        setTimeout(() => {
-            if (fitAddon && term) {
+        initTimer = window.setTimeout(() => {
+            initTimer = null;
+            if (isMountedRef && fitAddon && term) {
                 // Try to fit, but suppress errors if container is still hiding
                 safeFit();
 
@@ -275,6 +281,11 @@ watch(
 );
 
 onBeforeUnmount(() => {
+    isMountedRef = false;
+    if (initTimer) {
+        clearTimeout(initTimer);
+        initTimer = null;
+    }
     if (resizeObserver) resizeObserver.disconnect();
 });
 </script>

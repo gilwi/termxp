@@ -170,14 +170,20 @@ func readProcessCPUStats() (procTime uint64, totalTime uint64, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	fields := strings.Fields(string(data))
-	if len(fields) < 15 {
-		return 0, 0, fmt.Errorf("invalid proc self stat format")
+	content := string(data)
+	lastParen := strings.LastIndex(content, ")")
+	if lastParen == -1 || lastParen+1 >= len(content) {
+		return 0, 0, fmt.Errorf("invalid proc self stat format: missing closing paren")
+	}
+
+	fields := strings.Fields(content[lastParen+1:])
+	if len(fields) < 13 {
+		return 0, 0, fmt.Errorf("invalid proc self stat format: not enough fields")
 	}
 
 	var utime, stime uint64
-	_, _ = fmt.Sscanf(fields[13], "%d", &utime)
-	_, _ = fmt.Sscanf(fields[14], "%d", &stime)
+	_, _ = fmt.Sscanf(fields[11], "%d", &utime)
+	_, _ = fmt.Sscanf(fields[12], "%d", &stime)
 
 	return utime + stime, totalTime, nil
 }
@@ -218,7 +224,7 @@ func readCPUStats() (idle, total uint64, err error) {
 	if scanner.Scan() {
 		line := scanner.Text()
 		fields := strings.Fields(line)
-		if len(fields) > 4 && fields[0] == "cpu" {
+		if len(fields) >= 9 && fields[0] == "cpu" {
 			var user, nice, system, idleVal, iowait, irq, softirq, steal uint64
 			_, _ = fmt.Sscanf(fields[1], "%d", &user)
 			_, _ = fmt.Sscanf(fields[2], "%d", &nice)

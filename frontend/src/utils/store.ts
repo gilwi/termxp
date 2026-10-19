@@ -136,8 +136,11 @@ export function disposeCachedTerminal(paneId: string) {
     }
 }
 
-// Custom simple UUID generator for client-side session IDs
+// Cryptographic UUID generator for client-side session and pane IDs
 export function generateUUID(): string {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+        return crypto.randomUUID();
+    }
     return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
         const r = (Math.random() * 16) | 0;
         const v = c === 'x' ? r : (r & 0x3) | 0x8;
@@ -177,8 +180,8 @@ export const store = reactive({
 
     // Actions
     addTab() {
-        const id = Date.now().toString();
-        const rootPaneId = `pane-${Date.now()}`;
+        const id = generateUUID();
+        const rootPaneId = `pane-${generateUUID()}`;
         const index = this.tabs.length + 1;
         const newTab: Tab = {
             id,
@@ -194,6 +197,10 @@ export const store = reactive({
         this.activeTabId = id;
         const tab = this.tabs.find((t) => t.id === id);
         if (tab) {
+            // Reset maximized pane if it belonged to another tab to avoid blank screens
+            if (this.maximizedPaneId && !findNode(tab.rootNode, this.maximizedPaneId)) {
+                this.maximizedPaneId = null;
+            }
             const firstTerm = getFirstTerminalNode(tab.rootNode);
             if (firstTerm) {
                 this.activePaneId = firstTerm.id;
@@ -229,24 +236,20 @@ export const store = reactive({
         const tab = this.getActiveTab();
         if (!tab) return;
 
-        const newPaneId = `pane-${Date.now()}`;
+        const newPaneId = `pane-${generateUUID()}`;
         tab.rootNode = splitNode(tab.rootNode, paneId, newPaneId, orientation);
         this.activePaneId = newPaneId;
     },
 
     closePane(paneId: string) {
-        const tab = this.getActiveTab();
-        if (!tab) {
-            for (const t of this.tabs) {
-                const found = findNode(t.rootNode, paneId);
-                if (found) {
-                    this.performClosePane(t, paneId);
-                    return;
-                }
+        // Find the tab that actually owns this pane, even if it's currently inactive
+        for (const t of this.tabs) {
+            const found = findNode(t.rootNode, paneId);
+            if (found) {
+                this.performClosePane(t, paneId);
+                return;
             }
-            return;
         }
-        this.performClosePane(tab, paneId);
     },
 
     performClosePane(tab: Tab, paneId: string) {

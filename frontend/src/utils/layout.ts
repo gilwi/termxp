@@ -69,7 +69,6 @@ export function removeNode(root: PaneNode, id: string): PaneNode | null {
     }
   }
 
-  /*
   // Collapse parent split if it is down to a single child
   if (parent.children && parent.children.length === 1) {
     const singleChild = parent.children[0];
@@ -85,7 +84,6 @@ export function removeNode(root: PaneNode, id: string): PaneNode | null {
       return singleChild;
     }
   }
-  */
 
   return root;
 }
@@ -142,10 +140,12 @@ export function moveNode(
   if (!sourceInfo || !targetInfo) return root;
 
   if (position === "swap") {
-    // Swap the session ID and keep layout tree shape unchanged
-    const tempSession = sourceInfo.node.sessionId;
-    sourceInfo.node.sessionId = targetInfo.node.sessionId;
-    targetInfo.node.sessionId = tempSession;
+    // Atomically swap the two pane nodes in their parents so session identities,
+    // event listeners, xterm DOM instances, and histories remain properly bound
+    if (sourceInfo.parent && targetInfo.parent) {
+      sourceInfo.parent.children![sourceInfo.index] = targetInfo.node;
+      targetInfo.parent.children![targetInfo.index] = sourceInfo.node;
+    }
     return root;
   }
 
