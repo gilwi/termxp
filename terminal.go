@@ -2,380 +2,458 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
 
 	"github.com/creack/pty"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"golang.org/x/sys/unix"
 )
 
-// TerminalSession represents an active shell process running in a PTY
-type TerminalSession struct {
-	ID       string
-	cmd      *exec.Cmd
-	ptyFile  *os.File
-	mu       sync.Mutex
-	closed   bool
-	waitDone chan struct{}
-	exitCode int
+const outputChunkSize = 32 * 1024
+
+type TerminalOutput struct {
+	Sequence uint64 `json:"sequence"`
+	Data     string `json:"data"` // Base64 bytes, never a partial UTF-8 string.
+}
+type TerminalExit struct {
+	Code int `json:"code"`
+}
+type SessionOptions struct {
+	Shell string      `json:"shell"`
+	Cwd   string      `json:"cwd"`
+	SSH   *SSHProfile `json:"ssh,omitempty"`
 }
 
-// TerminalService manages terminal sessions
+type TerminalSession struct {
+	ID           string
+	cmd          *exec.Cmd
+	ptyFile      *os.File
+	mu           sync.Mutex
+	closed       bool
+	waitDone     chan struct{}
+	done         chan struct{}
+	stop         chan struct{}
+	stopOnce     sync.Once
+	fileOnce     sync.Once
+	ack          chan uint64
+	acknowledged uint64
+	sequence     uint64
+	exitCode     int // Published by closing waitDone.
+	logFile      *os.File
+}
+
 type TerminalService struct {
 	ctx          context.Context
 	sessions     map[string]*TerminalSession
 	mu           sync.Mutex
 	shuttingDown bool
+	// Injectable event sink keeps transport/lifecycle tests independent of Wails.
+	emit func(string, interface{})
 }
 
-// NewTerminalService creates a new TerminalService instance
 func NewTerminalService() *TerminalService {
-	return &TerminalService{
-		sessions: make(map[string]*TerminalSession),
+	return &TerminalService{sessions: make(map[string]*TerminalSession)}
+}
+func (ts *TerminalService) setContext(ctx context.Context) { ts.ctx = ctx }
+func (ts *TerminalService) event(name string, value interface{}) {
+	if ts.emit != nil {
+		ts.emit(name, value)
+	} else if ts.ctx != nil {
+		runtime.EventsEmit(ts.ctx, name, value)
 	}
 }
-
-// setContext assigns the Wails context internally (unexported from Wails IPC bridge)
-func (ts *TerminalService) setContext(ctx context.Context) {
-	ts.ctx = ctx
+func executable(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 && filepath.IsAbs(path)
 }
-
-// detectShell resolves the default shell path and appropriate login arguments
+func shellArgs(path string) []string {
+	switch filepath.Base(path) {
+	case "bash", "zsh", "fish", "ksh", "dash", "sh":
+		return []string{"-l"}
+	default:
+		return nil
+	}
+}
 func detectShell() (string, []string) {
-	if shell := os.Getenv("SHELL"); shell != "" {
-		if _, err := os.Stat(shell); err == nil {
-			return shell, []string{"--login"}
+	for _, path := range []string{os.Getenv("SHELL"), "/bin/bash", "/bin/sh"} {
+		if executable(path) {
+			return path, shellArgs(path)
 		}
 	}
-	if _, err := os.Stat("/bin/bash"); err == nil {
-		return "/bin/bash", []string{"--login"}
-	}
-	return "/bin/sh", []string{}
+	return "/bin/sh", nil
 }
-
-// StartSession spawns a new shell inside a PTY with the given session ID
-func (ts *TerminalService) StartSession(sessionID string, cols, rows int) error {
-	if sessionID == "" || len(sessionID) > 128 {
-		return fmt.Errorf("invalid session id")
+func (ts *TerminalService) ListShells() []string {
+	preferred, _ := detectShell()
+	shells := []string{preferred}
+	if data, err := os.ReadFile("/etc/shells"); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			path := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+			if !executable(path) {
+				continue
+			}
+			found := false
+			for _, existing := range shells {
+				if existing == path {
+					found = true
+				}
+			}
+			if !found {
+				shells = append(shells, path)
+			}
+		}
 	}
-
-	// Clamp terminal dimensions to safe bounds
+	return shells
+}
+func dimensions(cols, rows int) (int, int) {
 	if cols < 10 {
 		cols = 80
-	} else if cols > 1000 {
+	}
+	if cols > 1000 {
 		cols = 1000
 	}
 	if rows < 2 {
 		rows = 24
-	} else if rows > 500 {
+	}
+	if rows > 500 {
 		rows = 500
 	}
-
-	ts.mu.Lock()
-	if ts.shuttingDown {
-		ts.mu.Unlock()
-		return fmt.Errorf("terminal service is shutting down")
+	return cols, rows
+}
+func (ts *TerminalService) StartSession(id string, cols, rows int) error {
+	return ts.StartSessionWithOptions(id, cols, rows, SessionOptions{})
+}
+func (ts *TerminalService) StartSessionWithOptions(id string, cols, rows int, options SessionOptions) error {
+	if id == "" || len(id) > 128 {
+		return fmt.Errorf("invalid session id")
 	}
-	if _, exists := ts.sessions[sessionID]; exists {
-		ts.mu.Unlock()
-		return fmt.Errorf("session already exists: %s", sessionID)
+	cols, rows = dimensions(cols, rows)
+	shell, args := detectShell()
+	if options.Shell != "" && options.SSH == nil {
+		if !executable(options.Shell) {
+			return fmt.Errorf("shell must be an absolute executable path")
+		}
+		shell, args = options.Shell, shellArgs(options.Shell)
 	}
-	ts.mu.Unlock()
-
-	shellPath, shellArgs := detectShell()
-	cmd := exec.Command(shellPath, shellArgs...)
+	if options.SSH != nil {
+		if err := validateSSH(*options.SSH); err != nil {
+			return err
+		}
+		var err error
+		shell, err = exec.LookPath("ssh")
+		if err != nil {
+			return fmt.Errorf("OpenSSH is unavailable: %w", err)
+		}
+		args = sshArgs(*options.SSH)
+	}
+	if options.Cwd != "" && !filepath.IsAbs(options.Cwd) {
+		return fmt.Errorf("working directory must be absolute")
+	}
+	cmd := exec.Command(shell, args...)
 	cmd.Env = append(os.Environ(), "TERM=xterm-256color")
-
-	ptyFile, err := pty.Start(cmd)
-	if err != nil {
-		return fmt.Errorf("failed to start command in PTY: %w", err)
-	}
-
-	// Set initial window size
-	err = pty.Setsize(ptyFile, &pty.Winsize{
-		Cols: uint16(cols),
-		Rows: uint16(rows),
-	})
-	if err != nil {
-		// Clean up process and descriptor on partial failure
-		_ = ptyFile.Close()
-		if cmd.Process != nil {
-			_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-			_ = cmd.Wait()
-		}
-		return fmt.Errorf("failed to set size: %w", err)
-	}
-
-	session := &TerminalSession{
-		ID:       sessionID,
-		cmd:      cmd,
-		ptyFile:  ptyFile,
-		waitDone: make(chan struct{}),
-	}
-
-	// Reap child process asynchronously so it never remains a zombie
-	go func() {
-		defer close(session.waitDone)
-		if err := cmd.Wait(); err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				session.exitCode = exitErr.ExitCode()
-			} else {
-				session.exitCode = 1
-			}
-		} else {
-			session.exitCode = 0
-		}
-	}()
-
+	cmd.Dir = options.Cwd
+	// Hold the registry lock through spawn: duplicate IDs and shutdown cannot cross
+	// the reservation/registration boundary. No blocking PTY I/O occurs here.
 	ts.mu.Lock()
+	defer ts.mu.Unlock()
 	if ts.shuttingDown {
-		ts.mu.Unlock()
-		ts.killSessionInternal(session)
 		return fmt.Errorf("terminal service is shutting down")
 	}
-	ts.sessions[sessionID] = session
-	ts.mu.Unlock()
-
-	// Start reading PTY output in a goroutine
-	go ts.readLoop(session)
-
+	if _, exists := ts.sessions[id]; exists {
+		return fmt.Errorf("session already exists: %s", id)
+	}
+	if len(ts.sessions) >= 64 {
+		return fmt.Errorf("session limit reached (64)")
+	}
+	file, err := pty.StartWithSize(cmd, &pty.Winsize{Cols: uint16(cols), Rows: uint16(rows)})
+	if err != nil {
+		return fmt.Errorf("start terminal: %w", err)
+	}
+	// creack/pty's ioctls call File.Fd(), which switches Go files to blocking
+	// mode. Rewrap a nonblocking duplicate so Close can cancel pending I/O;
+	// future resize ioctls use SyscallConn rather than File.Fd().
+	file, err = pollablePTY(file)
+	if err != nil {
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		_ = cmd.Wait()
+		return fmt.Errorf("configure cancellable PTY: %w", err)
+	}
+	s := &TerminalSession{ID: id, cmd: cmd, ptyFile: file, waitDone: make(chan struct{}), done: make(chan struct{}), stop: make(chan struct{}), ack: make(chan uint64, 1)}
+	ts.sessions[id] = s
+	go func() {
+		err := cmd.Wait()
+		if err != nil {
+			s.exitCode = 1
+			var exit *exec.ExitError
+			if errors.As(err, &exit) {
+				s.exitCode = exit.ExitCode()
+			}
+		}
+		close(s.waitDone)
+	}()
+	go ts.readLoop(s)
+	go ts.watchCwd(s)
 	return nil
 }
-
-// readLoop reads output from the PTY and emits coalesced events to the frontend.
-// It synchronizes with the flusher so trailing bytes are never lost on exit.
-func (ts *TerminalService) readLoop(s *TerminalSession) {
-	buf := make([]byte, 32*1024)
-
-	const (
-		flushInterval = 12 * time.Millisecond // ~one frame; keeps latency invisible
-		maxPending    = 64 * 1024             // force a flush before buffering grows unbounded
-	)
-
-	var (
-		mu          sync.Mutex
-		pending     []byte
-		flushChan   = make(chan struct{}, 1) // size-triggered flush nudge
-		done        = make(chan struct{})    // signals reader has stopped
-		flusherDone = make(chan struct{})    // signals flusher has fully completed
-	)
-
-	// flush emits whatever is currently buffered as a single event.
-	flush := func() {
-		mu.Lock()
-		if len(pending) == 0 {
-			mu.Unlock()
-			return
-		}
-		data := pending
-		pending = nil
-		mu.Unlock()
-
-		if ts.ctx != nil {
-			runtime.EventsEmit(ts.ctx, "terminal:data:"+s.ID, string(data))
-		}
+func pollablePTY(original *os.File) (*os.File, error) {
+	defer original.Close()
+	raw, err := original.SyscallConn()
+	if err != nil {
+		return nil, err
 	}
-
-	// Flusher goroutine: time-based + size-triggered flushing.
-	ticker := time.NewTicker(flushInterval)
-	go func() {
-		defer close(flusherDone)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ticker.C:
-				flush()
-			case <-flushChan:
-				flush()
-			case <-done:
-				flush() // final flush so trailing bytes aren't lost
-				return
-			}
+	duplicate := -1
+	var fdErr error
+	err = raw.Control(func(fd uintptr) {
+		duplicate, fdErr = unix.FcntlInt(fd, unix.F_DUPFD_CLOEXEC, 0)
+		if fdErr == nil {
+			fdErr = unix.SetNonblock(duplicate, true)
 		}
-	}()
+	})
+	if err != nil || fdErr != nil {
+		if duplicate >= 0 {
+			_ = unix.Close(duplicate)
+		}
+		if err != nil {
+			return nil, err
+		}
+		return nil, fdErr
+	}
+	return os.NewFile(uintptr(duplicate), original.Name()), nil
+}
 
-	// Reader loop.
+func (ts *TerminalService) session(id string) *TerminalSession {
+	ts.mu.Lock()
+	defer ts.mu.Unlock()
+	return ts.sessions[id]
+}
+
+// One chunk is in flight at a time. xterm acknowledges only after consuming it,
+// so a slow renderer applies backpressure all the way to the child process.
+func (ts *TerminalService) readLoop(s *TerminalSession) {
+	defer close(s.done)
+	defer func() {
+		ts.killSessionInternal(s)
+		<-s.waitDone
+		s.mu.Lock()
+		if s.logFile != nil {
+			_ = s.logFile.Close()
+			s.logFile = nil
+		}
+		s.mu.Unlock()
+		ts.mu.Lock()
+		if ts.sessions[s.ID] == s {
+			delete(ts.sessions, s.ID)
+		}
+		ts.mu.Unlock()
+	}()
+	buf := make([]byte, outputChunkSize)
 	for {
 		n, err := s.ptyFile.Read(buf)
 		if n > 0 {
-			mu.Lock()
-			pending = append(pending, buf[:n]...)
-			tooBig := len(pending) >= maxPending
-			mu.Unlock()
-
-			if tooBig {
-				select {
-				case flushChan <- struct{}{}:
-				default:
+			logError := ""
+			s.mu.Lock()
+			if s.logFile != nil {
+				if _, logErr := s.logFile.Write(buf[:n]); logErr != nil {
+					_ = s.logFile.Close()
+					s.logFile = nil
+					logError = logErr.Error()
+				}
+			}
+			s.sequence++
+			seq := s.sequence
+			s.mu.Unlock()
+			if logError != "" {
+				ts.event("terminal:log-error:"+s.ID, logError)
+			}
+			ts.event("terminal:data:"+s.ID, TerminalOutput{Sequence: seq, Data: base64.StdEncoding.EncodeToString(buf[:n])})
+			if ts.ctx != nil || ts.emit != nil {
+				for {
+					select {
+					case ack := <-s.ack:
+						if ack == seq {
+							goto consumed
+						}
+					case <-s.stop:
+						return
+					}
 				}
 			}
 		}
+	consumed:
 		if err != nil {
-			if err == io.EOF {
-				// Normal termination
-			}
 			break
 		}
 	}
-
-	// Signal reader stop and wait for final flush to complete
-	close(done)
-	<-flusherDone
-
-	// Wait briefly for process to be reaped and exit status recorded
+	// A closed slave can precede process exit. Ensure it cannot keep a session alive.
 	select {
 	case <-s.waitDone:
-	case <-time.After(1 * time.Second):
+	case <-time.After(200 * time.Millisecond):
+		ts.killSessionInternal(s)
+		<-s.waitDone
 	}
-
-	// Safely check and mark closed under session mutex
+	select {
+	case <-s.stop:
+		return
+	default:
+	}
+	ts.event("terminal:exit:"+s.ID, TerminalExit{Code: s.exitCode})
+}
+func (ts *TerminalService) AcknowledgeOutput(id string, sequence uint64) {
+	s := ts.session(id)
+	if s == nil {
+		return
+	}
 	s.mu.Lock()
-	isClosed := s.closed
-	s.closed = true
+	valid := sequence == s.sequence && sequence > s.acknowledged
+	if valid {
+		s.acknowledged = sequence
+	}
 	s.mu.Unlock()
-
-	if !isClosed {
-		if ts.ctx != nil {
-			runtime.EventsEmit(ts.ctx, "terminal:exit:"+s.ID, map[string]interface{}{
-				"code": s.exitCode,
-			})
+	if valid {
+		select {
+		case s.ack <- sequence:
+		default:
 		}
-		ts.removeAndKillSession(s)
 	}
 }
-
-// WriteToTerminal writes user input to the PTY without holding session mutex across blocking I/O
-func (ts *TerminalService) WriteToTerminal(sessionID string, data string) error {
+func (ts *TerminalService) WriteToTerminal(id, data string) error {
 	if len(data) > 1024*1024 {
 		return fmt.Errorf("write payload exceeds 1MB limit")
 	}
-
-	ts.mu.Lock()
-	session, exists := ts.sessions[sessionID]
-	ts.mu.Unlock()
-
-	if !exists {
-		return fmt.Errorf("session not found: %s", sessionID)
+	s := ts.session(id)
+	if s == nil {
+		return fmt.Errorf("session not found: %s", id)
 	}
-
-	session.mu.Lock()
-	if session.closed {
-		session.mu.Unlock()
+	s.mu.Lock()
+	closed := s.closed
+	s.mu.Unlock()
+	if closed {
 		return fmt.Errorf("session closed")
 	}
-	ptyFile := session.ptyFile
-	session.mu.Unlock()
-
-	_, err := ptyFile.Write([]byte(data))
+	_, err := s.ptyFile.Write([]byte(data))
 	return err
 }
-
-// ResizeTerminal updates the terminal PTY winsize with validated bounds
-func (ts *TerminalService) ResizeTerminal(sessionID string, cols, rows int) error {
-	if cols < 10 {
-		cols = 80
-	} else if cols > 1000 {
-		cols = 1000
+func (ts *TerminalService) ResizeTerminal(id string, cols, rows int) error {
+	s := ts.session(id)
+	if s == nil {
+		return fmt.Errorf("session not found: %s", id)
 	}
-	if rows < 2 {
-		rows = 24
-	} else if rows > 500 {
-		rows = 500
+	cols, rows = dimensions(cols, rows)
+	raw, err := s.ptyFile.SyscallConn()
+	if err != nil {
+		return err
 	}
-
-	ts.mu.Lock()
-	session, exists := ts.sessions[sessionID]
-	ts.mu.Unlock()
-
-	if !exists {
-		return fmt.Errorf("session not found: %s", sessionID)
+	var resizeErr error
+	err = raw.Control(func(fd uintptr) {
+		resizeErr = unix.IoctlSetWinsize(int(fd), unix.TIOCSWINSZ, &unix.Winsize{Col: uint16(cols), Row: uint16(rows)})
+	})
+	if err != nil {
+		return err
 	}
-
-	session.mu.Lock()
-	defer session.mu.Unlock()
-
-	if session.closed {
-		return fmt.Errorf("session closed")
+	return resizeErr
+}
+func (ts *TerminalService) KillSession(id string) {
+	if s := ts.session(id); s != nil {
+		ts.killSessionInternal(s)
 	}
-
-	return pty.Setsize(session.ptyFile, &pty.Winsize{
-		Cols: uint16(cols),
-		Rows: uint16(rows),
+}
+func (ts *TerminalService) killSessionInternal(s *TerminalSession) {
+	s.stopOnce.Do(func() {
+		s.mu.Lock()
+		s.closed = true
+		s.mu.Unlock()
+		close(s.stop)
+		s.fileOnce.Do(func() { _ = s.ptyFile.Close() })
+		select {
+		case <-s.waitDone:
+			return
+		default:
+		}
+		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
+		go func() {
+			select {
+			case <-s.waitDone:
+			case <-time.After(200 * time.Millisecond):
+				_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGKILL)
+			}
+		}()
 	})
 }
-
-// KillSession terminates the session command and closes file descriptors
-func (ts *TerminalService) KillSession(sessionID string) {
-	ts.mu.Lock()
-	session, exists := ts.sessions[sessionID]
-	if exists {
-		delete(ts.sessions, sessionID)
-	}
-	ts.mu.Unlock()
-
-	if !exists {
-		return
-	}
-
-	ts.killSessionInternal(session)
-}
-
-func (ts *TerminalService) removeAndKillSession(s *TerminalSession) {
-	ts.mu.Lock()
-	if ts.sessions[s.ID] == s {
-		delete(ts.sessions, s.ID)
-	}
-	ts.mu.Unlock()
-
-	ts.killSessionInternal(s)
-}
-
-func (ts *TerminalService) killSessionInternal(s *TerminalSession) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if s.closed {
-		return
-	}
-	s.closed = true
-
-	if s.ptyFile != nil {
-		_ = s.ptyFile.Close()
-	}
-
-	if s.cmd != nil && s.cmd.Process != nil {
-		// Terminate the process group gracefully with SIGTERM
-		_ = syscall.Kill(-s.cmd.Process.Pid, syscall.SIGTERM)
-
-		// If process doesn't terminate quickly, forcefully kill with SIGKILL
-		go func(pid int, waitDone <-chan struct{}) {
-			select {
-			case <-waitDone:
-				return
-			case <-time.After(200 * time.Millisecond):
-				_ = syscall.Kill(-pid, syscall.SIGKILL)
-			}
-		}(s.cmd.Process.Pid, s.waitDone)
-	}
-}
-
-// cleanupAllSessions shuts down all running terminal processes on exit (unexported from Wails IPC bridge)
 func (ts *TerminalService) cleanupAllSessions() {
 	ts.mu.Lock()
 	ts.shuttingDown = true
-	sessionsCopy := make([]*TerminalSession, 0, len(ts.sessions))
+	sessions := make([]*TerminalSession, 0, len(ts.sessions))
 	for _, s := range ts.sessions {
-		sessionsCopy = append(sessionsCopy, s)
+		sessions = append(sessions, s)
 	}
-	ts.sessions = make(map[string]*TerminalSession)
 	ts.mu.Unlock()
-
-	for _, s := range sessionsCopy {
+	for _, s := range sessions {
 		ts.killSessionInternal(s)
 	}
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for _, s := range sessions {
+		select {
+		case <-s.done:
+		case <-deadline.C:
+			return
+		}
+	}
+}
+func (ts *TerminalService) watchCwd(s *TerminalSession) {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	previous := ""
+	for {
+		if cwd, err := os.Readlink(fmt.Sprintf("/proc/%d/cwd", s.cmd.Process.Pid)); err == nil && cwd != previous {
+			previous = cwd
+			ts.event("terminal:cwd:"+s.ID, cwd)
+		}
+		select {
+		case <-s.done:
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// Logging is opt-in and creates a new private file; existing files are never overwritten.
+func (ts *TerminalService) LogSession(id, path string) error {
+	s := ts.session(id)
+	if s == nil {
+		return fmt.Errorf("session not found")
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return fmt.Errorf("session closed")
+	}
+	if path == "" {
+		if s.logFile != nil {
+			err := s.logFile.Close()
+			s.logFile = nil
+			return err
+		}
+		return nil
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("choose an absolute log path")
+	}
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return err
+	}
+	if s.logFile != nil {
+		_ = s.logFile.Close()
+	}
+	s.logFile = file
+	return nil
 }
