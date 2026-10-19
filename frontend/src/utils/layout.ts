@@ -1,37 +1,37 @@
-export interface PaneNode {
+import type { main } from "../../wailsjs/go/models";
+
+export interface TerminalNode {
   id: string;
-  type: "terminal" | "split";
-  orientation?: "horizontal" | "vertical";
-  children?: PaneNode[];
-  sizes?: number[];
-  sessionId?: string;
+  type: "terminal";
+  shell: string;
+  cwd: string;
+  ssh?: main.SSHProfile;
 }
-
+export interface SplitNode {
+  id: string;
+  type: "split";
+  orientation: "horizontal" | "vertical";
+  children: PaneNode[];
+  sizes: number[];
+}
+export type PaneNode = TerminalNode | SplitNode;
+export type Position = "left" | "right" | "top" | "bottom" | "swap";
+export const generateUUID = (): string => crypto.randomUUID();
 export function createTerminalNode(
-  id: string,
-  sessionId: string = "",
-): PaneNode {
-  return {
-    id,
-    type: "terminal",
-    sessionId,
-  };
+  id = generateUUID(),
+  shell = "",
+  cwd = "",
+): TerminalNode {
+  return { id, type: "terminal", shell, cwd };
 }
-
-/**
- * Searches for a node inside a PaneNode tree by ID.
- * Returns the node, its parent, and its index in the parent's children.
- */
 export function findNode(
   root: PaneNode,
   id: string,
-  parent: PaneNode | null = null,
-  index: number = -1,
-): { parent: PaneNode | null; node: PaneNode; index: number } | null {
-  if (root.id === id) {
-    return { parent, node: root, index };
-  }
-  if (root.type === "split" && root.children) {
+  parent: SplitNode | null = null,
+  index = -1,
+): { node: PaneNode; parent: SplitNode | null; index: number } | null {
+  if (root.id === id) return { node: root, parent, index };
+  if (root.type === "split") {
     for (let i = 0; i < root.children.length; i++) {
       const found = findNode(root.children[i], id, root, i);
       if (found) return found;
@@ -39,151 +39,115 @@ export function findNode(
   }
   return null;
 }
-
-/**
- * Removes a terminal or split pane by ID from the layout tree.
- * Collapses any parent split node if it only has 1 remaining child.
- * Returns the new root node.
- */
-export function removeNode(root: PaneNode, id: string): PaneNode | null {
-  if (root.id === id) {
-    return null;
-  }
-
-  const found = findNode(root, id);
-  if (!found || !found.parent || found.index === -1) {
-    return root;
-  }
-
-  const parent = found.parent;
-  parent.children?.splice(found.index, 1);
-  parent.sizes?.splice(found.index, 1);
-
-  // Distribute size percentages equally or proportionally
-  if (parent.children && parent.children.length > 0 && parent.sizes) {
-    const total = parent.sizes.reduce((sum, s) => sum + s, 0);
-    if (total > 0) {
-      parent.sizes = parent.sizes.map((s) => (s / total) * 100);
-    } else {
-      parent.sizes = parent.children.map(() => 100 / parent.children!.length);
-    }
-  }
-
-  // Collapse parent split if it is down to a single child
-  if (parent.children && parent.children.length === 1) {
-    const singleChild = parent.children[0];
-    const grandparentInfo = findNode(root, parent.id);
-    if (
-      grandparentInfo &&
-      grandparentInfo.parent &&
-      grandparentInfo.index !== -1
-    ) {
-      grandparentInfo.parent.children![grandparentInfo.index] = singleChild;
-    } else {
-      // Parent was the root node of the tree
-      return singleChild;
-    }
-  }
-
-  return root;
+export function terminals(root: PaneNode): TerminalNode[] {
+  return root.type === "terminal" ? [root] : root.children.flatMap(terminals);
 }
-
-/**
- * Splits a terminal pane into two panes (the original and a new blank one).
- * Returns the root of the tree.
- */
+function normalize(
+  root: SplitNode,
+  children: PaneNode[],
+  sizes: number[],
+): PaneNode | null {
+  if (!children.length) return null;
+  if (children.length === 1) return children[0];
+  const total = sizes.reduce((sum, size) => sum + size, 0);
+  return {
+    ...root,
+    children,
+    sizes: sizes.map((s) =>
+      total > 0 ? (s / total) * 100 : 100 / children.length,
+    ),
+  };
+}
+export function removeNode(root: PaneNode, id: string): PaneNode | null {
+  if (root.id === id) return null;
+  if (root.type === "terminal") return root;
+  const children: PaneNode[] = [],
+    sizes: number[] = [];
+  root.children.forEach((child, i) => {
+    const next = removeNode(child, id);
+    if (next) {
+      children.push(next);
+      sizes.push(root.sizes[i] ?? 1);
+    }
+  });
+  return normalize(root, children, sizes);
+}
+function replaceNode(
+  root: PaneNode,
+  id: string,
+  replacement: PaneNode,
+): PaneNode {
+  if (root.id === id) return replacement;
+  if (root.type === "terminal") return root;
+  return {
+    ...root,
+    children: root.children.map((c) => replaceNode(c, id, replacement)),
+  };
+}
+function split(
+  first: PaneNode,
+  second: PaneNode,
+  orientation: SplitNode["orientation"],
+): SplitNode {
+  return {
+    id: generateUUID(),
+    type: "split",
+    orientation,
+    children: [first, second],
+    sizes: [50, 50],
+  };
+}
 export function splitNode(
   root: PaneNode,
   targetId: string,
   newPaneId: string,
-  orientation: "horizontal" | "vertical",
+  orientation: SplitNode["orientation"],
+  shell = "",
 ): PaneNode {
-  const found = findNode(root, targetId);
-  if (!found) return root;
-
-  const targetNode = found.node;
-  const parent = found.parent;
-
-  // Create the split node
-  const splitNode: PaneNode = {
-    id: `split-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    type: "split",
-    orientation: orientation,
-    children: [targetNode, createTerminalNode(newPaneId, "")],
-    sizes: [50, 50],
-  };
-
-  if (!parent) {
-    // Target was root
-    return splitNode;
-  }
-
-  parent.children![found.index] = splitNode;
-  return root;
+  const target = findNode(root, targetId)?.node;
+  return target?.type === "terminal"
+    ? replaceNode(
+        root,
+        targetId,
+        split(
+          target,
+          createTerminalNode(newPaneId, shell, target.cwd),
+          orientation,
+        ),
+      )
+    : root;
 }
-
-/**
- * Moves a source terminal pane to a target terminal pane.
- * position can be: 'left', 'right', 'top', 'bottom', or 'swap'.
- * Returns the root of the tree.
- */
 export function moveNode(
   root: PaneNode,
   sourceId: string,
   targetId: string,
-  position: "left" | "right" | "top" | "bottom" | "swap",
+  position: Position,
 ): PaneNode {
   if (sourceId === targetId) return root;
-
-  const sourceInfo = findNode(root, sourceId);
-  const targetInfo = findNode(root, targetId);
-  if (!sourceInfo || !targetInfo) return root;
-
+  const source = findNode(root, sourceId)?.node,
+    target = findNode(root, targetId)?.node;
+  if (source?.type !== "terminal" || target?.type !== "terminal") return root;
   if (position === "swap") {
-    // Atomically swap the two pane nodes in their parents so session identities,
-    // event listeners, xterm DOM instances, and histories remain properly bound
-    if (sourceInfo.parent && targetInfo.parent) {
-      sourceInfo.parent.children![sourceInfo.index] = targetInfo.node;
-      targetInfo.parent.children![targetInfo.index] = sourceInfo.node;
-    }
-    return root;
+    const swap = (n: PaneNode): PaneNode =>
+      n.id === sourceId
+        ? target
+        : n.id === targetId
+          ? source
+          : n.type === "split"
+            ? { ...n, children: n.children.map(swap) }
+            : n;
+    return swap(root);
   }
-
-  // Keep a copy of the source pane before removal
-  const sourceNodeCopy = JSON.parse(JSON.stringify(sourceInfo.node));
-
-  // Extract source pane from the tree
-  let newRoot = removeNode(root, sourceId);
-  if (!newRoot) return root;
-
-  // Search for the target pane in the now-clean tree
-  const cleanTargetInfo = findNode(newRoot, targetId);
-  if (!cleanTargetInfo) return newRoot;
-
-  const targetNode = cleanTargetInfo.node;
-  const targetNodeCopy = JSON.parse(JSON.stringify(targetNode));
-
-  const isSideBySide = position === "left" || position === "right";
-  const orientation = isSideBySide ? "vertical" : "horizontal";
-
-  const children =
-    position === "left" || position === "top"
-      ? [sourceNodeCopy, targetNodeCopy]
-      : [targetNodeCopy, sourceNodeCopy];
-
-  // Convert target node position into a split node
-  const splitNode: PaneNode = {
-    id: `split-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
-    type: "split",
-    orientation: orientation,
-    children: children,
-    sizes: [50, 50],
-  };
-
-  if (!cleanTargetInfo.parent) {
-    return splitNode;
-  }
-
-  cleanTargetInfo.parent.children![cleanTargetInfo.index] = splitNode;
-  return newRoot;
+  const remaining = removeNode(root, sourceId);
+  if (!remaining) return root;
+  const before = position === "left" || position === "top";
+  return replaceNode(
+    remaining,
+    targetId,
+    split(
+      before ? source : target,
+      before ? target : source,
+      position === "left" || position === "right" ? "vertical" : "horizontal",
+    ),
+  );
 }
