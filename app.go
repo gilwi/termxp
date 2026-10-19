@@ -6,15 +6,20 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	wailsruntime "github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
 // App struct
 type App struct {
-	ctx       context.Context
-	collector MetricsCollector
+	ctx        context.Context
+	collector  MetricsCollector
+	allowClose atomic.Bool
 }
 
 // NewApp creates a new App application struct
@@ -37,13 +42,30 @@ func (a *App) startup(ctx context.Context) {
 }
 
 // GetSystemStats fetches real-time CPU, RAM, and Uptime for the current process
-func (a *App) GetSystemStats() (map[string]interface{}, error) {
+func (a *App) GetSystemStats() (SystemStats, error) {
 	return a.collector.GetStats()
 }
 
+// SystemStats describes only the Go application process, excluding shells/webview.
+type SystemStats struct {
+	CPU       *float64 `json:"cpu"`
+	Memory    *float64 `json:"memory"`
+	MemoryRaw string   `json:"memoryRaw"`
+	Uptime    string   `json:"uptime"`
+}
+
+func (a *App) beforeClose(ctx context.Context) bool {
+	if a.allowClose.Load() {
+		return false
+	}
+	wailsruntime.EventsEmit(ctx, "app:closing")
+	return true
+}
+func (a *App) ConfirmClose() { a.allowClose.Store(true); wailsruntime.Quit(a.ctx) }
+
 // MetricsCollector defines the interface for OS stats retrieval
 type MetricsCollector interface {
-	GetStats() (map[string]interface{}, error)
+	GetStats() (SystemStats, error)
 }
 
 // LinuxMetricsCollector implements MetricsCollector for Linux systems via /proc
@@ -62,30 +84,19 @@ func NewLinuxMetricsCollector() *LinuxMetricsCollector {
 }
 
 // GetStats retrieves stats on Linux
-func (l *LinuxMetricsCollector) GetStats() (map[string]interface{}, error) {
-	memRSS, err := readProcessMemory()
-	if err != nil {
-		memRSS = 0
+func (l *LinuxMetricsCollector) GetStats() (SystemStats, error) {
+	stats := SystemStats{MemoryRaw: "Unavailable", Uptime: formatUptime(time.Since(l.startTime).Seconds())}
+	if rss, err := readProcessMemory(); err == nil {
+		stats.MemoryRaw = formatMemory(rss)
+		if total, _, err := readMemInfo(); err == nil && total > 0 {
+			percent := float64(rss) / float64(total) * 100
+			stats.Memory = &percent
+		}
 	}
-	memTotal, _, _ := readMemInfo()
-	memPercent := 0.0
-	if memTotal > 0 {
-		memPercent = (float64(memRSS) / float64(memTotal)) * 100.0
+	if cpu, err := l.calculateProcessCPULoad(); err == nil {
+		stats.CPU = &cpu
 	}
-
-	cpuPercent, err := l.calculateProcessCPULoad()
-	if err != nil {
-		cpuPercent = 0.0
-	}
-
-	uptimeStr := formatUptime(time.Since(l.startTime).Seconds())
-
-	return map[string]interface{}{
-		"cpu":       cpuPercent,
-		"memory":    memPercent,
-		"memoryRaw": formatMemory(memRSS),
-		"uptime":    uptimeStr,
-	}, nil
+	return stats, nil
 }
 
 func (l *LinuxMetricsCollector) calculateProcessCPULoad() (float64, error) {
@@ -107,7 +118,7 @@ func (l *LinuxMetricsCollector) calculateProcessCPULoad() (float64, error) {
 	totalDiff := float64(total2 - total1)
 	procDiff := float64(proc2 - proc1)
 
-	return (procDiff / totalDiff) * 100.0, nil
+	return (procDiff / totalDiff) * 100.0 * float64(runtime.NumCPU()), nil
 }
 
 // FallbackMetricsCollector implements MetricsCollector for macOS/Windows
@@ -123,14 +134,8 @@ func NewFallbackMetricsCollector() *FallbackMetricsCollector {
 }
 
 // GetStats retrieves stats for fallback systems
-func (f *FallbackMetricsCollector) GetStats() (map[string]interface{}, error) {
-	uptimeStr := formatUptime(time.Since(f.startTime).Seconds())
-	return map[string]interface{}{
-		"cpu":       0.0,
-		"memory":    0.0,
-		"memoryRaw": "0 MB",
-		"uptime":    uptimeStr,
-	}, nil
+func (f *FallbackMetricsCollector) GetStats() (SystemStats, error) {
+	return SystemStats{MemoryRaw: "Unavailable", Uptime: formatUptime(time.Since(f.startTime).Seconds())}, nil
 }
 
 // Helper formatting and reading functions
@@ -170,7 +175,10 @@ func readProcessCPUStats() (procTime uint64, totalTime uint64, err error) {
 	if err != nil {
 		return 0, 0, err
 	}
-	content := string(data)
+	return parseProcessCPUStats(string(data), totalTime)
+}
+
+func parseProcessCPUStats(content string, totalTime uint64) (uint64, uint64, error) {
 	lastParen := strings.LastIndex(content, ")")
 	if lastParen == -1 || lastParen+1 >= len(content) {
 		return 0, 0, fmt.Errorf("invalid proc self stat format: missing closing paren")
@@ -181,9 +189,14 @@ func readProcessCPUStats() (procTime uint64, totalTime uint64, err error) {
 		return 0, 0, fmt.Errorf("invalid proc self stat format: not enough fields")
 	}
 
-	var utime, stime uint64
-	_, _ = fmt.Sscanf(fields[11], "%d", &utime)
-	_, _ = fmt.Sscanf(fields[12], "%d", &stime)
+	utime, err := strconv.ParseUint(fields[11], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
+	stime, err := strconv.ParseUint(fields[12], 10, 64)
+	if err != nil {
+		return 0, 0, err
+	}
 
 	return utime + stime, totalTime, nil
 }
@@ -225,18 +238,16 @@ func readCPUStats() (idle, total uint64, err error) {
 		line := scanner.Text()
 		fields := strings.Fields(line)
 		if len(fields) >= 9 && fields[0] == "cpu" {
-			var user, nice, system, idleVal, iowait, irq, softirq, steal uint64
-			_, _ = fmt.Sscanf(fields[1], "%d", &user)
-			_, _ = fmt.Sscanf(fields[2], "%d", &nice)
-			_, _ = fmt.Sscanf(fields[3], "%d", &system)
-			_, _ = fmt.Sscanf(fields[4], "%d", &idleVal)
-			_, _ = fmt.Sscanf(fields[5], "%d", &iowait)
-			_, _ = fmt.Sscanf(fields[6], "%d", &irq)
-			_, _ = fmt.Sscanf(fields[7], "%d", &softirq)
-			_, _ = fmt.Sscanf(fields[8], "%d", &steal)
-
-			idle = idleVal + iowait
-			total = idle + user + nice + system + irq + softirq + steal
+			counters := make([]uint64, 8)
+			for i := range counters {
+				value, err := strconv.ParseUint(fields[i+1], 10, 64)
+				if err != nil {
+					return 0, 0, fmt.Errorf("invalid CPU counter: %w", err)
+				}
+				counters[i] = value
+				total += value
+			}
+			idle = counters[3] + counters[4]
 			return idle, total, nil
 		}
 	}
