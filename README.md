@@ -1,63 +1,58 @@
-# 🚀 TermXP
+# TermXP
 
-**TermXP** is a premium, high-performance terminal emulator designed for power users who value both aesthetics and functionality. Built on the cutting-edge **Wails v2** framework, it bridges a high-speed Go backend with a modern, glassmorphic Vue 3 frontend to deliver a terminal experience that feels like the future.
+A Linux-first desktop terminal built with Go, Wails v2, Vue 3, TypeScript, and xterm.js.
 
-![TermXP Preview](build/appicon.png)
+## Features
 
-## ✨ Features
+- Tabs with editable names and working-directory labels.
+- Nested resizable panes, drag-and-drop moves/swaps, and pane maximization.
+- Five themes, font controls, Ctrl+scroll zoom, and optional copy-on-select.
+- Scrollback search with Ctrl+F and an action palette with Ctrl+P.
+- Shell discovery and a persistent default-shell picker.
+- Exited panes retain output and offer Reconnect.
+- Automatic settings and workspace persistence; restored panes create fresh processes.
+- SSH profiles using the installed OpenSSH client, with key paths and jump hosts.
+- Opt-in per-pane logging to a new private file.
+- Broadcast typing/paste to running panes in the selected tab, with visible destinations.
+- Go-process CPU/RAM metrics and application uptime.
 
-- **💎 Stunning Glassmorphism:** A beautiful, semi-transparent UI with customizable blur effects and vibrant accent glows.
-- **⚡ Pro Split-Pane Layout:** Deeply nested recursive split-panes. Organize your workspace with horizontal and vertical splits, drag-and-drop repositioning, and fluid resizing.
-- **🎨 Dynamic Theming:** Switch instantly between premium themes like *Cyberpunk*, *Dracula*, *Matrix*, and *Monokai*.
-- **📊 Real-Time App Metrics:** Monitor TermXP's own footprint with process-specific CPU usage, human-readable RAM consumption (MB/GB), and application uptime.
-- **⌨️ Power-User Shortcuts:** 
-    - `Ctrl + Shift + T`: Open new tab
-    - `Ctrl + Shift + W`: Close active tab
-    - `Ctrl + Shift + C`: Copy selection
-    - `Ctrl + Shift + V`: Paste from clipboard
-    - High-performance PTY management powered by `creack/pty`.
-- **🚀 Snippet Library:** Run common commands instantly from a customizable quick-action sidebar.
+Linux is the supported target. macOS has not been validated; Windows terminals require a future ConPTY adapter.
 
-## 🛠️ Technical Architecture
+## Development
 
-TermXP is engineered for stability and speed:
+Requirements: Go 1.25.1 or newer, Node 22.12 or newer, npm, and Wails CLI **2.17.0**. The dependency scanner uses Go 1.26+ (Go can download that toolchain automatically).
 
-- **Backend (Go):** Handles low-level PTY (Pseudo-Terminal) management, process lifecycle, and system telemetry. It uses Wails events for zero-latency data streaming.
-- **Frontend (Vue 3 + TypeScript):** A reactive, type-safe interface utilizing `@xterm/xterm` for high-fidelity terminal rendering.
-- **IPC:** Seamless bridge between Go and JS/TS using Wails bindings, ensuring high-frequency updates (like terminal output) remain smooth.
+On Ubuntu 24.04:
 
-## 🚀 Getting Started
-
-### Prerequisites
-
-- **Go:** 1.23+
-- **Node.js:** 18+ (with npm)
-- **Wails CLI:** `go install github.com/wailsapp/wails/v2/cmd/wails@latest`
-
-### Development Mode
-
-Run the app with hot-reloading for both backend and frontend:
-
-```bash
-wails dev
+```sh
+sudo apt-get install libgtk-3-dev libwebkit2gtk-4.1-dev
+npm --prefix frontend ci
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.17.0
+wails dev -tags webkit2_41
 ```
 
-### Production Build
+Build a native Linux executable:
 
-Generate a platform-native redistributable binary:
-
-```bash
-wails build
+```sh
+wails build -tags webkit2_41
 ```
 
-## 📁 Project Structure
+Output: `build/bin/termxp`. The CLI and Go module versions must match. Build hooks use `npm ci`; commit the lockfile when updating dependencies.
 
-- `/app.go`: Application-level logic and telemetry.
-- `/terminal.go`: PTY session management and I/O bridging.
-- `/frontend/src/`: Vue 3 source code, including the recursive layout engine.
-- `/frontend/src/components/`: Core UI components (TerminalInstance, TerminalLayout).
-- `/frontend/src/utils/layout.ts`: The recursive tree logic for split-pane management.
+## Shortcuts
 
----
+| Shortcut | Action |
+|---|---|
+| Ctrl+Shift+T / W | New tab / close tab |
+| Ctrl+Shift+E / O | Split right / below |
+| Ctrl+Shift+X | Toggle maximized pane |
+| Ctrl+Shift+C / V | Copy / terminal-aware paste |
+| Ctrl+F | Search scrollback |
+| Ctrl+P | Command palette |
+| Ctrl+scroll | Font size |
 
-Built with ❤️ for the terminal enthusiasts.
+Choose the shell for new tabs from the workspace selector. Open the sidebar for SSH profiles and preferences. Each active pane has Search and Log controls; logs may contain sensitive terminal output and are never enabled automatically.
+
+Settings live at `$XDG_CONFIG_HOME/termxp/config.json`, or `~/.config/termxp/config.json`. Saves are atomic, with private files and a private application directory. Workspace restore is enabled by default and can be disabled in preferences. It restores layout, names, shell choices, and directories; terminal output and live sessions are not restored. SSH profiles contain connection metadata and key paths, never private-key contents or passwords.
+
+See [architecture](docs/ARCHITECTURE.md), [validation](docs/TESTING.md), and the [roadmap](ROADMAP.md).
