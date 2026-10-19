@@ -9,6 +9,7 @@ import (
 
 func TestTerminalServiceValidation(t *testing.T) {
 	ts := NewTerminalService()
+	t.Cleanup(ts.cleanupAllSessions)
 
 	// Empty session ID
 	err := ts.StartSession("", 80, 24)
@@ -44,6 +45,7 @@ func TestTerminalServiceValidation(t *testing.T) {
 
 func TestTerminalSessionLifecycle(t *testing.T) {
 	ts := NewTerminalService()
+	t.Cleanup(ts.cleanupAllSessions)
 	sessionID := "test-session-1"
 
 	err := ts.StartSession(sessionID, 80, 24)
@@ -84,6 +86,7 @@ func TestTerminalSessionLifecycle(t *testing.T) {
 
 func TestConcurrentTerminalOperations(t *testing.T) {
 	ts := NewTerminalService()
+	t.Cleanup(ts.cleanupAllSessions)
 	const sessionCount = 5
 
 	var wg sync.WaitGroup
@@ -114,6 +117,7 @@ func TestConcurrentTerminalOperations(t *testing.T) {
 
 func TestCleanupAllSessions(t *testing.T) {
 	ts := NewTerminalService()
+	t.Cleanup(ts.cleanupAllSessions)
 
 	for i := 0; i < 3; i++ {
 		id := fmt.Sprintf("cleanup-%d", i)
@@ -134,6 +138,7 @@ func TestCleanupAllSessions(t *testing.T) {
 
 func TestProcessReaping(t *testing.T) {
 	ts := NewTerminalService()
+	t.Cleanup(ts.cleanupAllSessions)
 	sessionID := "reap-test"
 
 	err := ts.StartSession(sessionID, 80, 24)
@@ -162,4 +167,3 @@ func TestProcessReaping(t *testing.T) {
 		t.Errorf("timed out waiting for process to be reaped")
 	}
 }
-
