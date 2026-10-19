@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, onMounted, onBeforeUnmount, computed } from "vue";
+import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import TerminalLayout from "./components/TerminalLayout.vue";
 import CustomTitleBar from "./components/CustomTitleBar.vue";
 import { GetSystemStats } from "../wailsjs/go/main/App";
@@ -7,30 +7,31 @@ import {
     EventsOn,
     WindowIsMaximised,
 } from "../wailsjs/runtime/runtime";
+import CommandPalette from "./components/CommandPalette.vue";
+import SessionSettings from "./components/SessionSettings.vue";
+import { initializeSettings } from "./utils/settings";
+import { sessions } from "./utils/sessions";
+import { snippets } from "./utils/actions";
+import { terminals } from "./utils/layout";
+import type { Tab } from "./utils/store";
+import { ConfirmClose } from "../wailsjs/go/main/App";
 import { store, themes } from "./utils/store";
 
+const broadcastTargets = computed(() => {
+    const tab = store.getActiveTab();
+    if (!tab) return "None";
+    return terminals(tab.rootNode).filter(n => sessions.get(n.id)?.controller.state.status === "running").map(n => n.ssh?.name || sessions.get(n.id)?.controller.state.cwd || n.id.slice(0, 8)).join(", ") || "None";
+});
 const isMaximised = ref<boolean>(false);
 const renameInputRef = ref<HTMLInputElement[]>([]);
 
-// Command snippets list
-const snippets = [
-    { label: "List Files", cmd: "ls -lah" },
-    { label: "System Info", cmd: "uname -a" },
-    { label: "Disk Space", cmd: "df -h" },
-    { label: "Active Network", cmd: "ss -tulpn" },
-    { label: "CPU Load Check", cmd: "cat /proc/loadavg" },
-    { label: "Who Am I", cmd: "whoami && pwd" },
-];
-
 // Edit tab naming helper to set focus
-function startRenameTab(tab: any) {
+function startRenameTab(tab: Tab) {
     store.startRenameTab(tab);
-    setTimeout(() => {
-        if (renameInputRef.value && renameInputRef.value.length > 0) {
-            renameInputRef.value[0].focus();
-            renameInputRef.value[0].select();
-        }
-    }, 50);
+    void nextTick(() => {
+        renameInputRef.value[0]?.focus();
+        renameInputRef.value[0]?.select();
+    });
 }
 
 // System stats poller
@@ -38,6 +39,10 @@ let statsInterval: number | null = null;
 
 // Global Keyboard Shortcuts
 function handleGlobalKeyDown(e: KeyboardEvent) {
+    if (store.paletteOpen || !store.ready) return;
+    if (e.ctrlKey && e.key.toLowerCase() === "p") { e.preventDefault(); store.paletteOpen = true; return; }
+    if (e.ctrlKey && e.key.toLowerCase() === "f") { e.preventDefault(); const c = sessions.get(store.activePaneId)?.controller; if (c) c.state.searchOpen = true; return; }
+
     // Ctrl+Shift+T: New Tab
     if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
         e.preventDefault();
@@ -75,8 +80,8 @@ async function fetchStats() {
     try {
         const data = await GetSystemStats();
         if (data) {
-            store.stats.cpu = Math.round(data.cpu);
-            store.stats.memory = Math.round(data.memory);
+            store.stats.cpu = data.cpu == null ? null : Math.round(data.cpu);
+            store.stats.memory = data.memory == null ? null : Math.round(data.memory);
             store.stats.memoryRaw = data.memoryRaw;
             store.stats.uptime = data.uptime;
         }
@@ -85,8 +90,19 @@ async function fetchStats() {
     }
 }
 
-onMounted(() => {
-    store.addTab();
+let flushSettings: (() => Promise<void>) | undefined;
+let disposed = false;
+let closing = false;
+const subscriptions: (() => void)[] = [];
+onMounted(async () => {
+    subscriptions.push(EventsOn("app:closing", async () => {
+        if (closing) return;
+        closing = true;
+        try { await flushSettings?.(); await ConfirmClose(); }
+        catch (err) { store.notice = `Could not close: ${String(err)}`; closing = false; }
+    }));
+    flushSettings = await initializeSettings();
+    if (disposed) { await flushSettings(); return; }
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
     window.addEventListener("keydown", handleGlobalKeyDown);
@@ -94,12 +110,12 @@ onMounted(() => {
     // Listen for window state changes to handle border radius
     try {
         if (typeof EventsOn === "function") {
-            EventsOn("wails:window-maximise", () => {
+            subscriptions.push(EventsOn("wails:window-maximise", () => {
                 isMaximised.value = true;
-            });
-            EventsOn("wails:window-unmaximise", () => {
+            }));
+            subscriptions.push(EventsOn("wails:window-unmaximise", () => {
                 isMaximised.value = false;
-            });
+            }));
         }
 
         if (typeof WindowIsMaximised === "function") {
@@ -115,6 +131,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+    disposed = true;
+    subscriptions.forEach(off => off());
+    void flushSettings?.();
     if (statsInterval) {
         clearInterval(statsInterval);
     }
@@ -153,25 +172,25 @@ onBeforeUnmount(() => {
                             <div class="metric-card">
                                 <div class="metric-info">
                                     <span>App CPU</span>
-                                    <span class="metric-value">{{ store.stats.cpu }}%</span>
+                                    <span class="metric-value">{{ store.stats.cpu == null ? "Unavailable" : store.stats.cpu + "%" }}</span>
                                 </div>
                                 <div class="progress-bar-container">
                                     <div
                                         class="progress-bar cpu-bar"
-                                        :style="{ width: store.stats.cpu + '%' }"
+                                        :style="{ width: Math.min(100, store.stats.cpu || 0) + '%' }"
                                     ></div>
                                 </div>
                             </div>
 
                             <div class="metric-card">
                                 <div class="metric-info">
-                                    <span>App RAM</span>
+                                    <span>Go process RAM</span>
                                     <span class="metric-value">{{ store.stats.memoryRaw }}</span>
                                 </div>
                                 <div class="progress-bar-container">
                                     <div
                                         class="progress-bar memory-bar"
-                                        :style="{ width: store.stats.memory + '%' }"
+                                        :style="{ width: (store.stats.memory || 0) + '%' }"
                                     ></div>
                                 </div>
                             </div>
@@ -245,6 +264,8 @@ onBeforeUnmount(() => {
                             </button>
                         </div>
                     </section>
+
+                    <SessionSettings />
 
                     <!-- Quick actions / commands -->
                     <section class="section">
@@ -320,7 +341,7 @@ onBeforeUnmount(() => {
                                     @dblclick="startRenameTab(tab)"
                                     title="Double click to rename"
                                 >
-                                    {{ tab.name }}
+                                    {{ tab.name }}<small v-if="store.tabDirectory(tab)" class="tab-cwd" :title="store.tabDirectory(tab)"> · {{ store.tabDirectory(tab).split("/").filter(Boolean).pop() || "/" }}</small>
                                 </span>
 
                                 <!-- Close button -->
@@ -345,7 +366,7 @@ onBeforeUnmount(() => {
                             <!-- Add Tab Button -->
                             <button
                                 class="add-tab-btn"
-                                @click="store.addTab"
+                                @click="store.addTab()"
                                 title="Open new shell session"
                             >
                                 <svg
@@ -365,6 +386,13 @@ onBeforeUnmount(() => {
                     </div>
                 </header>
 
+                <div v-if="store.notice" class="workspace-notice" role="alert">{{ store.notice }} <button @click="store.notice = ''">Dismiss</button></div>
+                <div v-if="store.ready" class="workspace-tools">
+                    <label>Shell <select v-model="store.defaultShell" aria-label="Shell for new tabs"><option value="">System default</option><option v-for="shell in store.shells" :key="shell" :value="shell">{{ shell }}</option></select></label>
+                    <button @click="store.paletteOpen = true">Commands (Ctrl+P)</button>
+                    <button :aria-pressed="store.broadcast" @click="store.broadcast = !store.broadcast">{{ store.broadcast ? 'Stop broadcast' : 'Broadcast input' }}</button>
+                    <span v-if="store.broadcast" role="status">Typing and paste go to all running panes in this tab: {{ broadcastTargets }}</span>
+                </div>
                 <!-- Terminal content pane -->
                 <div class="terminal-workspace-container">
                     <!-- Render recursive split layouts for each tab. v-show keeps running terminals alive. -->
@@ -385,7 +413,7 @@ onBeforeUnmount(() => {
                                 Spawns local terminal processes (e.g. bash) on
                                 your host machine to run CLI actions.
                             </p>
-                            <button @click="store.addTab" class="action-btn">
+                            <button @click="store.addTab()" class="action-btn">
                                 <span>Start New Shell</span>
                             </button>
                         </div>
@@ -393,12 +421,19 @@ onBeforeUnmount(() => {
                 </div>
             </main>
         </div>
+        <CommandPalette v-if="store.paletteOpen" />
     </div>
 </template>
 
 <style>
+.workspace-tools,.workspace-notice { display:flex;align-items:center;gap:10px;padding:6px 12px;flex-wrap:wrap;font-size:12px;background:#171724aa; }
+.workspace-tools button,.workspace-tools select,.workspace-notice button { background:#202032;color:inherit;border:1px solid #777;border-radius:4px;padding:5px;cursor:pointer; }
+.workspace-tools button[aria-pressed=true] { background:#9f1239; }
+.tab-cwd { opacity:.7;font-size:10px; }
+
 /* Reset and core layout */
 .app-container {
+    color-scheme: dark;
     display: flex;
     flex-direction: column;
     width: 100vw;
