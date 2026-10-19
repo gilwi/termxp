@@ -1,112 +1,37 @@
-TermXP — Final Feature Plan
-============================
-14 features · 4 milestones · ~4–6 weeks total
+# TermXP roadmap
 
+Linux-first; prioritize reliable daily use. The original 14-feature backlog is implemented in this working tree, with the validation limits below.
 
-MILESTONE 1 — Foundation fixes (~1–2 days)
--------------------------------------------
-Do these first. Everything else depends on them.
+| Original feature | State |
+|---|---|
+| Settings persistence | Implemented: versioned atomic private JSON saves |
+| Shell detection | Implemented: validated `$SHELL`, fallbacks, `/etc/shells` discovery |
+| Session reconnect | Implemented: retained output, status, fresh session IDs |
+| Shell picker | Implemented: workspace selector and persisted default |
+| Font size | Implemented: controls, Ctrl+scroll, persistence |
+| Tab rename | Implemented and persisted |
+| Copy on select | Implemented as opt-in preference |
+| Working directory labels | Implemented on Linux; SSH remote cwd is not detected |
+| Scrollback search | Implemented: Ctrl+F, highlighting, next/previous |
+| Session logging | Implemented: explicit new-file path, private permissions |
+| Layout save/restore | Implemented: fresh sessions from descriptors |
+| Pane broadcast | Implemented: selected-tab scope, visible destinations |
+| Command palette | Implemented: fuzzy action search, Ctrl+P |
+| SSH profiles | Implemented: host/user/port/key path/jump host; local validation only |
 
-1. Settings persistence
-   Store theme, preferences, and future feature config in a JSON file via
-   the Wails runtime path. Add SaveConfig / LoadConfig Go methods.
-   Files: Go (app.go), Vue (App.vue)
+## Reliability foundation delivered
 
-2. Smarter shell detection
-   Scan /etc/shells and check $SHELL env var before falling back.
-   Fixes silent breakage on macOS (zsh default) and NixOS.
-   Files: Go (terminal.go)
+- Atomic duplicate-session rejection, process reaping, explicit PTY cleanup, cancellable I/O, bounded shutdown.
+- Component-independent frontend controllers, cancellable startup, stable identity across layout changes, retained exited panes.
+- Sequenced byte transport with consumption acknowledgements and bounded outstanding output.
+- Typed layout/config/metrics, reproducible dependency installs, upgraded frontend tooling, Linux CI/package/native smoke checks.
 
-3. Session reconnect on crash
-   When terminal:exit fires unexpectedly, show a "Reconnect" button in the
-   pane instead of leaving a dead terminal. Reuse the existing StartSession call.
-   Files: Go (terminal.go), Vue (TerminalInstance.vue)
+## Follow-up validation and development
 
+1. Test real SSH hosts, jump hosts, authentication prompts, and disconnected networks in a controlled environment.
+2. Run longer desktop soak tests, including high output, interactive full-screen programs, multiline paste, selection, and drag-and-drop during output. Measure full Go/webview/process-tree memory and latency on representative hardware.
+3. Evaluate larger bounded output windows only if measured throughput requires them; preserve acknowledgement/cancellation guarantees.
+4. Add Linux distribution packaging/signing and release automation once native validation is stable.
+5. Add macOS native PTY/metrics validation, then a Windows ConPTY adapter before claiming support there.
 
-MILESTONE 2 — Daily driver polish (~1 week, features mostly independent)
--------------------------------------------------------------------------
-
-4. Shell picker on startup
-   Dropdown in the new tab dialog, populated from the shell list detected
-   in step 2. Persist the default choice to config (step 1).
-   Depends on: 1, 2
-   Files: Go, Vue
-
-5. Font size control
-   Pass fontSize to xterm constructor. Wire Ctrl+scroll and +/− UI controls.
-   Persist to config.
-   Depends on: 1
-   Files: Vue (TerminalInstance.vue), xterm
-
-6. Tab rename
-   Double-click a tab label to edit it inline. Store the custom name alongside
-   the session ID in the layout tree.
-   Files: Vue (App.vue)
-
-7. Copy on select
-   Wire xterm's onSelectionChange event to auto-copy to clipboard.
-   Files: Vue (TerminalInstance.vue)
-
-8. Working directory in tab label
-   Poll /proc/<pid>/cwd (Linux) or lsof (macOS) from Go every few seconds,
-   emit via Wails event, display in the tab alongside the custom name.
-   Depends on: 6
-   Files: Go (terminal.go), Vue
-
-9. Scrollback search
-   Load @xterm/addon-search. Ctrl+F opens a floating bar with match
-   highlighting and forward/back navigation. No Go changes needed.
-   Files: Vue (TerminalInstance.vue), @xterm/addon-search
-
-
-MILESTONE 3 — Workspace features (~1–2 weeks, sequential)
-----------------------------------------------------------
-
-10. Session logging
-    Add a LogSession(id, path string) Go method that tees PTY output to a
-    file via the existing readLoop. Per-pane toggle in the UI.
-    Files: Go (terminal.go), Vue
-
-11. Layout save and restore
-    Serialize the layout.ts tree (splits, tab names, shell paths, cwds) to
-    config JSON on close. Offer to restore on startup. Add SaveLayout /
-    LoadLayout Go method pair.
-    Depends on: 1, 6, 8
-    Files: Go, Vue (layout.ts)
-
-12. Pane broadcast (sync input)
-    A toolbar toggle. When active, keystrokes are written to all session IDs
-    in the layout tree via WriteToTerminal, not just the focused pane.
-    Pure frontend — no new Go needed.
-    Depends on: 11 (best after layout is stable)
-    Files: Vue (App.vue)
-
-
-MILESTONE 4 — Power features (~2–3 weeks, one new Go service)
--------------------------------------------------------------
-
-13. Command palette
-    Ctrl+P opens a fuzzy-search overlay listing all actions: new tab,
-    split right/below, switch theme, connect SSH, toggle broadcast, run snippet.
-    Static action registry in Vue; actions call existing Wails bindings.
-    Best after steps 11 and 14 are stable.
-    Files: Vue (new component)
-
-14. SSH profile manager
-    New SSHService in Go storing profiles (host, user, key path, jump host)
-    in the config file. Connecting spawns a PTY session running:
-      ssh -i <key> <user>@<host>
-    No SSH library needed. Vue sidebar panel lists and launches profiles.
-    Depends on: 1, 2, 4
-    Files: Go (new ssh.go service), Vue (new sidebar component)
-
-
-KEY DEPENDENCY NOTE
--------------------
-Settings persistence (step 1) must land before anything else.
-Steps 4, 5, 11, and 14 all write to config — doing it once cleanly
-means every subsequent feature gets persistence for free.
-
-Only one genuinely new Go service is introduced in the entire plan
-(SSH profile manager, step 14). Everything else extends terminal.go
-or app.go, or lives entirely in the Vue frontend.
+No calendar estimate is assigned to these follow-ups until their environments and acceptance criteria are established. See `docs/TESTING.md` for automated checks and remaining manual scenarios.
