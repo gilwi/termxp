@@ -19,6 +19,7 @@ func main() {
 	// Create instances of the app structures
 	app := NewApp()
 	terminalService := NewTerminalService()
+	configService := NewConfigService()
 
 	// Create application with options
 	err := wails.Run(&options.App{
@@ -34,12 +35,14 @@ func main() {
 			app.startup(ctx)
 			terminalService.setContext(ctx)
 		},
+		OnBeforeClose: app.beforeClose,
 		OnShutdown: func(ctx context.Context) {
 			terminalService.cleanupAllSessions()
 		},
 		Bind: []interface{}{
 			app,
 			terminalService,
+			configService,
 		},
 		Windows: &windows.Options{
 			WebviewIsTransparent: true,
