@@ -1,4 +1,5 @@
 import { store } from "./store";
+import { recoverSettings } from "./settings";
 import { themes } from "./themes";
 import { sessions } from "./sessions";
 export interface Action {
@@ -6,16 +7,21 @@ export interface Action {
   label: string;
   run(): void;
 }
-export const snippets = [
-  { label: "List Files", cmd: "ls -lah" },
-  { label: "System Info", cmd: "uname -a" },
-  { label: "Disk Space", cmd: "df -h" },
-  { label: "Active Network", cmd: "ss -tulpn" },
-  { label: "CPU Load Check", cmd: "cat /proc/loadavg" },
-  { label: "Who Am I", cmd: "whoami && pwd" },
-];
 export function actions(): Action[] {
   return [
+    ...(store.recoveryRequired
+      ? [
+          {
+            id: "recover",
+            label: "Recover configuration with backup",
+            run: () => {
+              void recoverSettings().catch((err) => {
+                store.notice = String(err);
+              });
+            },
+          },
+        ]
+      : []),
     { id: "new", label: "New shell tab", run: () => store.addTab() },
     {
       id: "close",
@@ -33,6 +39,16 @@ export function actions(): Action[] {
       run: () => store.splitPane(store.activePaneId, "horizontal"),
     },
     {
+      id: "right-same",
+      label: "Split right with same connection",
+      run: () => store.splitPane(store.activePaneId, "vertical", "same"),
+    },
+    {
+      id: "below-same",
+      label: "Split below with same connection",
+      run: () => store.splitPane(store.activePaneId, "horizontal", "same"),
+    },
+    {
       id: "maximize",
       label: "Toggle maximized pane",
       run: () => store.toggleMaximize(),
@@ -42,7 +58,7 @@ export function actions(): Action[] {
       label: "Search terminal scrollback",
       run: () => {
         const c = sessions.get(store.activePaneId)?.controller;
-        if (c) c.state.searchOpen = true;
+        if (c) c.toggleSearch(true);
       },
     },
     {
@@ -80,14 +96,14 @@ export function actions(): Action[] {
       run: () => store.selectTab(tab.id),
     })),
     ...store.sshProfiles.map((profile) => ({
-      id: `ssh:${profile.name}`,
+      id: `ssh:${profile.id}`,
       label: `SSH: ${profile.name}`,
       run: () => store.addTab(profile),
     })),
-    ...snippets.map((s) => ({
-      id: `snippet:${s.label}`,
+    ...store.snippets.map((s) => ({
+      id: `snippet:${s.id}`,
       label: `Run: ${s.label}`,
-      run: () => store.runSnippet(s.cmd),
+      run: () => store.runSnippet(s.command),
     })),
   ];
 }

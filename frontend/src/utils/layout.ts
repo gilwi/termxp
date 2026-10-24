@@ -1,11 +1,12 @@
-import type { main } from "../../wailsjs/go/models";
+import type { SSHProfile } from "./domain";
 
 export interface TerminalNode {
   id: string;
   type: "terminal";
   shell: string;
   cwd: string;
-  ssh?: main.SSHProfile;
+  ssh?: SSHProfile;
+  sshProfileId?: string;
 }
 export interface SplitNode {
   id: string;

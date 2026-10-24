@@ -1,5 +1,6 @@
 import { reactive } from "vue";
-import type { main } from "../../wailsjs/go/models";
+import { defaultShortcuts, defaultSnippets } from "./domain";
+import type { SSHProfile } from "./domain";
 import {
   PaneNode,
   Position,
@@ -18,6 +19,7 @@ export interface Tab {
   id: string;
   name: string;
   rootNode: PaneNode;
+  focusedPaneId?: string;
 }
 export const store = reactive({
   tabs: [] as Tab[],
@@ -30,7 +32,10 @@ export const store = reactive({
   shells: [] as string[],
   copyOnSelect: false,
   restoreWorkspace: true,
-  sshProfiles: [] as main.SSHProfile[],
+  recoveryRequired: false,
+  snippets: defaultSnippets.map((s) => ({ ...s })),
+  shortcuts: { ...defaultShortcuts },
+  sshProfiles: [] as SSHProfile[],
   sidebarOpen: false,
   editingTabId: null as string | null,
   editingName: "",
@@ -56,7 +61,7 @@ export const store = reactive({
     const controller = sessions.get(this.activePaneId)?.controller;
     return controller?.state.status === "running" ? controller.sessionId : null;
   },
-  addTab(ssh?: main.SSHProfile) {
+  addTab(ssh?: SSHProfile) {
     if (
       this.tabs.reduce((count, t) => count + terminals(t.rootNode).length, 0) >=
       64
@@ -65,7 +70,10 @@ export const store = reactive({
       return;
     }
     const root = createTerminalNode(generateUUID(), this.defaultShell);
-    if (ssh) root.ssh = ssh;
+    if (ssh) {
+      root.ssh = { ...ssh };
+      root.sshProfileId = ssh.id;
+    }
     const tab = {
       id: generateUUID(),
       name: ssh?.name || `Shell ${this.tabs.length + 1}`,
@@ -77,9 +85,13 @@ export const store = reactive({
   selectTab(id: string) {
     const tab = this.tabs.find((t) => t.id === id);
     if (!tab) return;
+    const previous = this.getActiveTab();
+    if (previous) previous.focusedPaneId = this.activePaneId;
     this.activeTabId = id;
-    if (!findNode(tab.rootNode, this.activePaneId))
-      this.activePaneId = terminals(tab.rootNode)[0]?.id || "";
+    this.activePaneId =
+      (tab.focusedPaneId && findNode(tab.rootNode, tab.focusedPaneId)
+        ? tab.focusedPaneId
+        : terminals(tab.rootNode)[0]?.id) || "";
     if (this.maximizedPaneId && !findNode(tab.rootNode, this.maximizedPaneId))
       this.maximizedPaneId = null;
     this.broadcast = false;
@@ -121,7 +133,11 @@ export const store = reactive({
     if (this.activePaneId === id)
       this.activePaneId = terminals(root)[0]?.id || "";
   },
-  splitPane(id: string, orientation: "horizontal" | "vertical") {
+  splitPane(
+    id: string,
+    orientation: "horizontal" | "vertical",
+    connection: "local" | "same" = "local",
+  ) {
     const tab = this.tabs.find((t) => findNode(t.rootNode, id));
     if (!tab) return;
     if (
@@ -141,14 +157,25 @@ export const store = reactive({
       this.notice = "Split nesting limit reached (16)";
       return;
     }
+    const source = findNode(tab.rootNode, id)?.node;
+    if (source?.type !== "terminal") return;
+    const liveCwd = sessions.get(id)?.controller.state.cwd || source.cwd;
     const newId = generateUUID();
     tab.rootNode = splitNode(
       tab.rootNode,
       id,
       newId,
       orientation,
-      this.defaultShell,
+      connection === "same" ? source.shell : this.defaultShell,
     );
+    const created = findNode(tab.rootNode, newId)?.node;
+    if (created?.type === "terminal") {
+      created.cwd = liveCwd;
+      if (connection === "same" && source.ssh) {
+        created.ssh = { ...source.ssh };
+        created.sshProfileId = source.sshProfileId;
+      }
+    }
     this.activePaneId = newId;
     this.maximizedPaneId = null;
     this.broadcast = false;
@@ -157,8 +184,12 @@ export const store = reactive({
     const tab = this.getActiveTab();
     if (!tab) return;
     const root = moveNode(tab.rootNode, source, target, position);
-    const depth = (node: PaneNode): number => node.type === "terminal" ? 0 : 1 + Math.max(...node.children.map(depth));
-    if (depth(root) > 16) { this.notice = "Split nesting limit reached (16)"; return; }
+    const depth = (node: PaneNode): number =>
+      node.type === "terminal" ? 0 : 1 + Math.max(...node.children.map(depth));
+    if (depth(root) > 16) {
+      this.notice = "Split nesting limit reached (16)";
+      return;
+    }
     tab.rootNode = root;
     this.activePaneId = source;
   },
@@ -174,6 +205,48 @@ export const store = reactive({
   },
   runSnippet(command: string) {
     sessions.get(this.activePaneId)?.controller.send(command + "\n");
+  },
+  updateSSHProfile(profile: SSHProfile): () => void {
+    const previous = this.sshProfiles;
+    const changed: {
+      node: TerminalNode;
+      ssh: SSHProfile | undefined;
+      id: string | undefined;
+    }[] = [];
+    this.sshProfiles = [
+      ...previous.filter((p) => p.id !== profile.id),
+      { ...profile },
+    ];
+    for (const tab of this.tabs)
+      for (const node of terminals(tab.rootNode))
+        if (node.sshProfileId === profile.id) {
+          changed.push({ node, ssh: node.ssh, id: node.sshProfileId });
+          node.ssh = { ...profile };
+          sessions.get(node.id)?.controller.updateSSH(profile);
+        }
+    return () => {
+      this.sshProfiles = previous;
+      for (const item of changed) {
+        item.node.ssh = item.ssh;
+        item.node.sshProfileId = item.id;
+        sessions.get(item.node.id)?.controller.updateSSH(item.ssh);
+      }
+    };
+  },
+  deleteSSHProfile(id: string): () => void {
+    const previous = this.sshProfiles;
+    const changed: TerminalNode[] = [];
+    this.sshProfiles = previous.filter((p) => p.id !== id);
+    for (const tab of this.tabs)
+      for (const node of terminals(tab.rootNode))
+        if (node.sshProfileId === id) {
+          changed.push(node);
+          node.sshProfileId = undefined;
+        }
+    return () => {
+      this.sshProfiles = previous;
+      for (const node of changed) node.sshProfileId = id;
+    };
   },
   startRenameTab(tab: Tab) {
     this.editingTabId = tab.id;

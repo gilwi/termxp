@@ -271,14 +271,14 @@ function onDrop(
         >
             <div class="pane-title">
                 <span class="terminal-icon">🐚</span>
-                <span class="title-text font-mono">Shell Session</span>
+                <span class="title-text font-mono">{{ node.ssh?.name || "Shell Session" }}</span>
             </div>
             <div class="pane-controls">
                 <!-- Split controls -->
                 <button
                     class="pane-btn"
                     @click="store.splitPane(node.id, 'vertical')"
-                    title="Split Vertically (Ctrl+Shift+E)"
+                    :title="node.ssh ? 'Split local shell right' : 'Split right'"
                 >
                     <svg
                         width="14"
@@ -302,7 +302,7 @@ function onDrop(
                 <button
                     class="pane-btn"
                     @click="store.splitPane(node.id, 'horizontal')"
-                    title="Split Horizontally (Ctrl+Shift+O)"
+                    :title="node.ssh ? 'Split local shell below' : 'Split below'"
                 >
                     <svg
                         width="14"
@@ -444,6 +444,8 @@ function onDrop(
                 :class="themeClass"
                 :style="{ top: contextMenuY + 'px', left: contextMenuX + 'px' }"
             >
+                <button v-if="node.type==='terminal' && node.ssh" class="context-menu-item" @click="store.splitPane(node.id,'vertical','same');closeContextMenu()">Split right — same SSH connection</button>
+                <button v-if="node.type==='terminal' && node.ssh" class="context-menu-item" @click="store.splitPane(node.id,'horizontal','same');closeContextMenu()">Split below — same SSH connection</button>
                 <button
                     class="context-menu-item"
                     @click="store.splitPane(node.id, 'vertical')"

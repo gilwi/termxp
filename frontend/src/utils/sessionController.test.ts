@@ -26,9 +26,13 @@ function fixture() {
     write: vi.fn().mockResolvedValue(undefined),
     resize: vi.fn().mockResolvedValue(undefined),
     ack: vi.fn().mockResolvedValue(undefined),
-    on: (name, handler) => {
+    log: vi.fn().mockResolvedValue(undefined),
+    on: (event, id, handler) => {
+      const name = `terminal:${event}:${id}`;
       listeners.set(name, handler);
-      return () => listeners.delete(name);
+      return () => {
+        listeners.delete(name);
+      };
     },
   };
   const controller = new SessionController(
@@ -61,7 +65,9 @@ describe("session controller ownership", () => {
     expect(f.writes[0].data).toEqual(new Uint8Array([0xf0, 0x9f]));
     expect(f.bridge.ack).not.toHaveBeenCalled();
     f.writes[0].callback!();
-    expect(f.bridge.ack).toHaveBeenCalledWith("session-1", 1);
+    await vi.waitFor(() =>
+      expect(f.bridge.ack).toHaveBeenCalledWith("session-1", 1),
+    );
     f.listeners.get("terminal:exit:session-1")!({ code: 7 });
     expect(f.controller.state.status).toBe("exited");
     expect(f.controller.state.code).toBe(7);
@@ -144,6 +150,94 @@ describe("session controller ownership", () => {
     f.listeners.get("terminal:data:session-1")!({ sequence: 4, data: "" });
     expect(f.bridge.kill).toHaveBeenCalledWith("session-1");
     expect(f.bridge.ack).not.toHaveBeenCalled();
+    f.controller.dispose();
+  });
+  it("makes acknowledgement failures reconnectable", async () => {
+    const f = fixture();
+    await f.controller.start();
+    vi.mocked(f.bridge.ack).mockRejectedValue(new Error("bridge down"));
+    f.listeners.get("terminal:data:session-1")!({ sequence: 1, data: "YQ==" });
+    f.writes[0].callback!();
+    await vi.waitFor(() => expect(f.controller.state.status).toBe("failed"));
+    expect(f.listeners.size).toBe(0);
+    expect(f.bridge.kill).toHaveBeenCalledWith("session-1");
+    await f.controller.start();
+    expect(f.controller.state.status).toBe("running");
+    f.controller.dispose();
+  });
+  it("recovers from malformed bytes and keeps output history", async () => {
+    const f = fixture();
+    await f.controller.start();
+    f.listeners.get("terminal:data:session-1")!({
+      sequence: 1,
+      data: "invalid%%%",
+    });
+    expect(f.controller.state.status).toBe("failed");
+    expect(f.term.dispose).not.toHaveBeenCalled();
+    f.controller.dispose();
+  });
+  it("owns logging state and preserves errors from failed log operations", async () => {
+    const f = fixture();
+    await f.controller.start();
+    await f.controller.startLogging("/tmp/session.log");
+    expect(f.controller.state.logging).toBe(true);
+    vi.mocked(f.bridge.log).mockRejectedValueOnce(new Error("cannot stop"));
+    await expect(f.controller.stopLogging()).rejects.toThrow();
+    expect(f.controller.state.logging).toBe(true);
+    await f.controller.stopLogging();
+    expect(f.controller.state.logging).toBe(false);
+    f.controller.dispose();
+  });
+
+  it("makes a hung acknowledgement RPC recoverable", async () => {
+    vi.useFakeTimers();
+    const f = fixture();
+    await f.controller.start();
+    vi.mocked(f.bridge.ack).mockImplementation(() => new Promise(() => {}));
+    f.listeners.get("terminal:data:session-1")!({ sequence: 1, data: "YQ==" });
+    f.writes[0].callback!();
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(f.controller.state.status).toBe("failed");
+    expect(f.bridge.kill).toHaveBeenCalledWith("session-1");
+    f.controller.dispose();
+    vi.useRealTimers();
+  });
+  it("does not overwrite an immediate logging error with a late RPC success", async () => {
+    const f = fixture();
+    await f.controller.start();
+    let resolve!: () => void;
+    vi.mocked(f.bridge.log).mockImplementation(
+      () =>
+        new Promise<void>((done) => {
+          resolve = done;
+        }),
+    );
+    const start = f.controller.startLogging("/tmp/log");
+    f.listeners.get("terminal:log-error:session-1")!("disk full");
+    resolve();
+    await start;
+    expect(f.controller.state.logging).toBe(false);
+    f.controller.dispose();
+  });
+  it("does not let a stuck old write block input after reconnect", async () => {
+    const f = fixture();
+    await f.controller.start();
+    let finish!: () => void;
+    vi.mocked(f.bridge.write).mockImplementationOnce(
+      () =>
+        new Promise<void>((done) => {
+          finish = done;
+        }),
+    );
+    f.input("old");
+    await vi.waitFor(() => expect(f.bridge.write).toHaveBeenCalledTimes(1));
+    f.listeners.get("terminal:data:session-1")!({ sequence: 99, data: "" });
+    await f.controller.start();
+    f.input("new");
+    await vi.waitFor(() =>
+      expect(f.bridge.write).toHaveBeenCalledWith("session-2", "new"),
+    );
+    finish();
     f.controller.dispose();
   });
 });
