@@ -1,4 +1,5 @@
 <script lang="ts" setup>
+import appIconUrl from "../assets/images/appicon.png";
 import {
     WindowMinimise,
     WindowToggleMaximise,
@@ -16,7 +17,7 @@ defineProps<{
         <div class="drag-region" style="--wails-draggable: drag"></div>
 
         <div class="title-section">
-            <span class="app-icon">🚀</span>
+            <img class="app-icon" :src="appIconUrl" alt="" aria-hidden="true" draggable="false" />
             <span class="app-title font-mono">{{ title }}</span>
         </div>
 
@@ -118,7 +119,11 @@ defineProps<{
 }
 
 .app-icon {
-    font-size: 14px;
+    display: block;
+    width: 18px;
+    height: 18px;
+    flex-shrink: 0;
+    object-fit: contain;
 }
 
 .app-title {

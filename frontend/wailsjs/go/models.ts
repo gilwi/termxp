@@ -1,5 +1,5 @@
 export namespace main {
-
+	
 	export class SSHProfile {
 	    id?: string;
 	    name: string;
@@ -8,11 +8,11 @@ export namespace main {
 	    port: number;
 	    keyPath: string;
 	    jumpHost: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SSHProfile(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -33,11 +33,11 @@ export namespace main {
 	    cwd?: string;
 	    sshProfileId?: string;
 	    ssh?: SSHProfile;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceNode(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.type = source["type"];
@@ -49,7 +49,7 @@ export namespace main {
 	        this.sshProfileId = source["sshProfileId"];
 	        this.ssh = this.convertValues(source["ssh"], SSHProfile);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -71,17 +71,17 @@ export namespace main {
 	export class WorkspaceTab {
 	    name: string;
 	    root: WorkspaceNode;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new WorkspaceTab(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.root = this.convertValues(source["root"], WorkspaceNode);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -104,11 +104,11 @@ export namespace main {
 	    id: string;
 	    label: string;
 	    command: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Snippet(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.id = source["id"];
@@ -127,11 +127,11 @@ export namespace main {
 	    restoreWorkspace: boolean;
 	    workspace: WorkspaceTab[];
 	    sshProfiles: SSHProfile[];
-
+	
 	    static createFrom(source: any = {}) {
 	        return new Config(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.snippets = this.convertValues(source["snippets"], Snippet);
@@ -145,7 +145,7 @@ export namespace main {
 	        this.workspace = this.convertValues(source["workspace"], WorkspaceTab);
 	        this.sshProfiles = this.convertValues(source["sshProfiles"], SSHProfile);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -168,18 +168,18 @@ export namespace main {
 	    config: Config;
 	    warning: string;
 	    recoveryRequired: boolean;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new ConfigResult(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.config = this.convertValues(source["config"], Config);
 	        this.warning = source["warning"];
 	        this.recoveryRequired = source["recoveryRequired"];
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -198,23 +198,23 @@ export namespace main {
 		    return a;
 		}
 	}
-
+	
 	export class SessionOptions {
 	    shell: string;
 	    cwd: string;
 	    ssh?: SSHProfile;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SessionOptions(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.shell = source["shell"];
 	        this.cwd = source["cwd"];
 	        this.ssh = this.convertValues(source["ssh"], SSHProfile);
 	    }
-
+	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {
 		    if (!a) {
 		        return a;
@@ -233,17 +233,17 @@ export namespace main {
 		    return a;
 		}
 	}
-
+	
 	export class SystemStats {
 	    cpu?: number;
 	    memory?: number;
 	    memoryRaw: string;
 	    uptime: string;
-
+	
 	    static createFrom(source: any = {}) {
 	        return new SystemStats(source);
 	    }
-
+	
 	    constructor(source: any = {}) {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.cpu = source["cpu"];
@@ -252,7 +252,7 @@ export namespace main {
 	        this.uptime = source["uptime"];
 	    }
 	}
-
+	
 
 }
 

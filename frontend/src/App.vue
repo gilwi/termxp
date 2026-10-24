@@ -2,6 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import TerminalLayout from "./components/TerminalLayout.vue";
 import CustomTitleBar from "./components/CustomTitleBar.vue";
+import appIconUrl from "./assets/images/appicon.png";
 import { applicationBridge } from "./utils/bridge";
 const {stats:GetSystemStats,confirmClose:ConfirmClose}=applicationBridge;
 import {
@@ -135,7 +136,7 @@ onBeforeUnmount(() => {
             <aside :class="['sidebar', { 'sidebar-closed': !store.sidebarOpen }]">
                 <div class="sidebar-header">
                     <div class="logo-area">
-                        <span class="logo-icon">🚀</span>
+                        <img class="logo-icon" :src="appIconUrl" alt="" aria-hidden="true" draggable="false" />
                         <h2>TermXP</h2>
                         <span class="badge">PRO</span>
                     </div>
@@ -501,7 +502,11 @@ onBeforeUnmount(() => {
 }
 
 .logo-icon {
-    font-size: 20px;
+    display: block;
+    width: 24px;
+    height: 24px;
+    flex-shrink: 0;
+    object-fit: contain;
 }
 
 .logo-area h2 {

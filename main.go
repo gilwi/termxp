@@ -15,6 +15,9 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+//go:embed build/appicon.png
+var appIcon []byte
+
 func main() {
 	// Create instances of the app structures
 	app := NewApp()
@@ -55,6 +58,7 @@ func main() {
 			WindowIsTranslucent:  true,
 		},
 		Linux: &linux.Options{
+			Icon:                appIcon,
 			WindowIsTranslucent: true,
 		},
 	})
