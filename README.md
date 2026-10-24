@@ -56,3 +56,11 @@ Choose the shell for new tabs from the workspace selector. Open the sidebar for 
 Settings live at `$XDG_CONFIG_HOME/termxp/config.json`, or `~/.config/termxp/config.json`. Saves are atomic, with private files and a private application directory. Workspace restore is enabled by default and can be disabled in preferences. It restores layout, names, shell choices, and directories; terminal output and live sessions are not restored. SSH profiles contain connection metadata and key paths, never private-key contents or passwords.
 
 See [architecture](docs/ARCHITECTURE.md), [validation](docs/TESTING.md), and the [roadmap](ROADMAP.md).
+
+## Recovery and customization
+
+The sidebar's **Actions and shortcuts** editor configures command snippets and keyboard bindings. Use canonical bindings such as `Ctrl+Alt+N`; leave a binding empty to disable it. Clipboard copy/paste bindings remain reserved.
+
+If settings cannot be read or use an unsupported version, autosave pauses to preserve the original file. **Back up original and save recovered settings** (also available in the palette) creates a private backup before replacing the file. If a final save fails, the window remains open with retry and explicit close-without-saving choices.
+
+SSH profiles have stable identities. Editing a profile affects future connections and reconnects; a running session remains connected as before. Deleting a profile leaves existing panes with a detached connection copy. SSH pane context menus and the palette offer **same connection** splits; ordinary splits open local shells using the latest reported local working directory. Tab switching remembers the last focused pane.

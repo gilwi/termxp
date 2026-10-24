@@ -132,11 +132,24 @@ with tempfile.TemporaryDirectory(prefix="termxp-smoke-") as temp:
             type_text("theme dracula")
             chord("Return")
             time.sleep(0.3)
+            # Simulate a storage failure at final save without relying on Unix
+            # permissions (which differ when CI runs as root).
+            config_dir = root / "config/termxp"
+            preserved_dir = root / "preserved-config"
+            config_dir.rename(preserved_dir)
+            config_dir.write_text("temporarily unavailable")
             # Close relative to the actual window size (small Xvfb screens may clamp it).
             parent = c.c_ulong(); left = c.c_int(); top = c.c_int()
             width = c.c_uint(); height = c.c_uint(); border = c.c_uint(); depth = c.c_uint()
             x.XGetGeometry(display, window, c.byref(parent), c.byref(left), c.byref(top), c.byref(width), c.byref(height), c.byref(border), c.byref(depth))
             t.XTestFakeMotionEvent(display, -1, width.value - 30, 16, 0)
+            t.XTestFakeButtonEvent(display, 1, True, 0)
+            t.XTestFakeButtonEvent(display, 1, False, 0)
+            x.XFlush(display)
+            time.sleep(0.6)
+            assert app.poll() is None, "Failed final save did not prevent close"
+            config_dir.unlink()
+            preserved_dir.rename(config_dir)
             t.XTestFakeButtonEvent(display, 1, True, 0)
             t.XTestFakeButtonEvent(display, 1, False, 0)
             x.XFlush(display)
@@ -164,7 +177,25 @@ with tempfile.TemporaryDirectory(prefix="termxp-smoke-") as temp:
             t.XTestFakeButtonEvent(display, 1, False, 0)
             x.XFlush(display)
             wait_for(lambda: app.poll() is not None, "Restored window did not close")
-            print("Native smoke passed: shell I/O, split, reconnect, tabs, palette, settings, restore, close")
+            # Unsupported config must survive startup and autosave until the
+            # user explicitly invokes recovery; recovery preserves raw bytes.
+            original = '{"version":99,"future":"must survive"}'
+            config_path = root / "config/termxp/config.json"
+            config_path.write_text(original)
+            app = subprocess.Popen([binary], env=env, stdout=log, stderr=log)
+            wait_for(lambda: find_window() is not None, "Recovery window did not appear")
+            window=find_window()
+            x.XMoveWindow(display,window,0,0);x.XRaiseWindow(display,window);x.XSetInputFocus(display,window,1,0);x.XFlush(display)
+            time.sleep(1)
+            assert config_path.read_text() == original, "Unsupported config was overwritten"
+            chord("Control_L","p");type_text("recover configuration");chord("Return")
+            wait_for(lambda: config_path.read_text() != original, "Explicit recovery did not save")
+            backups=list(config_dir.glob("config-recovery-*.json"))
+            assert any(path.read_text()==original for path in backups), "Recovery lost original bytes"
+            t.XTestFakeMotionEvent(display,-1,width.value-30,16,0)
+            t.XTestFakeButtonEvent(display,1,True,0);t.XTestFakeButtonEvent(display,1,False,0);x.XFlush(display)
+            wait_for(lambda: app.poll() is not None,"Recovered window did not close")
+            print("Native smoke passed: shell I/O, split, reconnect, tabs, palette, failed-save retry, restore, config recovery")
         except BaseException:
             log.flush(); log.seek(0)
             print(log.read(), file=sys.stderr)
