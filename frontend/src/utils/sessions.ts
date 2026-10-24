@@ -2,15 +2,8 @@ import { shallowReactive } from "vue";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
-import { main } from "../../wailsjs/go/models";
-import {
-  AcknowledgeOutput,
-  StartSessionWithOptions,
-  KillSession,
-  WriteToTerminal,
-  ResizeTerminal,
-} from "../../wailsjs/go/main/TerminalService";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { shortcutAction } from "./shortcuts";
+import { terminalBridge } from "./bridge";
 import { SessionController } from "./sessionController";
 import type { TerminalNode } from "./layout";
 import type { ITheme } from "@xterm/xterm";
@@ -23,6 +16,7 @@ export interface TerminalView {
   wrapper: HTMLDivElement;
   copyOnSelect: boolean;
   opened: boolean;
+  shortcuts: Record<string, string>;
 }
 export const sessions = shallowReactive(new Map<string, TerminalView>());
 let routeInput = (controller: SessionController, data: string) =>
@@ -54,20 +48,7 @@ export function acquireSession(
   const controller = new SessionController(
     term,
     { shell: node.shell, cwd: node.cwd, ssh: node.ssh },
-    {
-      start: (id, cols, rows, options) =>
-        StartSessionWithOptions(
-          id,
-          cols,
-          rows,
-          new main.SessionOptions(options),
-        ),
-      kill: KillSession,
-      write: WriteToTerminal,
-      resize: ResizeTerminal,
-      ack: AcknowledgeOutput,
-      on: EventsOn,
-    },
+    terminalBridge,
     (owner, data) => routeInput(owner, data),
   );
   const view: TerminalView = {
@@ -78,6 +59,7 @@ export function acquireSession(
     wrapper,
     copyOnSelect: false,
     opened: false,
+    shortcuts: {},
   };
   term.attachCustomKeyEventHandler((e) => {
     const key = e.key.toLowerCase();
@@ -101,13 +83,7 @@ export function acquireSession(
       e.preventDefault();
       return false;
     }
-    if (
-      e.ctrlKey &&
-      (key === "f" ||
-        key === "p" ||
-        (e.shiftKey && ["t", "w", "x", "e", "o"].includes(key)))
-    )
-      return false;
+    if (shortcutAction(e, view.shortcuts)) return false;
     return true;
   });
   term.onSelectionChange(() => {

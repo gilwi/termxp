@@ -33,3 +33,9 @@ Frontend tests cover layout identity/normalization, session subscription lifetim
 The development smoke starts an isolated Wails/Vite server and verifies missing/foreign origins cannot upgrade the IPC connection. CI uses Go 1.27.1; go.mod retains the minimum Go version.
 
 Linux CI runs unit/race/type/build/dependency checks, builds a package, and runs the native smoke test. It uploads the executable as a build artifact; it does not publish a release.
+
+## Recovery regression coverage
+
+The follow-up tests additionally exercise final-save rejection/retry, configuration recovery guards and exact backup preservation, legacy SSH IDs, shortcut/snippet defaults, shared save ordering and rollback, failed/hung output acknowledgements, malformed packets, input isolation after reconnect, logging error/RPC ordering, blocked disk writes, queue overflow, live split directories, same-SSH/local split choices, profile rename/deletion and remembered tab focus.
+
+Native smoke now temporarily replaces the isolated config directory with a file to force a final-save error. It verifies the application remains open, restores storage and retries close. It then launches with an unsupported-version config, verifies the original bytes survive startup, invokes explicit recovery through the palette and checks the private backup. These operations use only the test's temporary configuration.

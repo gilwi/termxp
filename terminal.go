@@ -2,13 +2,11 @@ package main
 
 import (
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -34,21 +32,23 @@ type SessionOptions struct {
 }
 
 type TerminalSession struct {
-	ID           string
-	cmd          *exec.Cmd
-	ptyFile      *os.File
-	mu           sync.Mutex
-	closed       bool
-	waitDone     chan struct{}
-	done         chan struct{}
-	stop         chan struct{}
-	stopOnce     sync.Once
-	fileOnce     sync.Once
-	ack          chan uint64
-	acknowledged uint64
-	sequence     uint64
-	exitCode     int // Published by closing waitDone.
-	logFile      *os.File
+	ID            string
+	cmd           *exec.Cmd
+	ptyFile       *os.File
+	mu            sync.Mutex
+	closed        bool
+	waitDone      chan struct{}
+	done          chan struct{}
+	stop          chan struct{}
+	stopOnce      sync.Once
+	fileOnce      sync.Once
+	ack           chan uint64
+	acknowledged  uint64
+	sequence      uint64
+	exitCode      int // Published by closing waitDone.
+	logger        *sessionLog
+	logOpening    bool
+	logGeneration uint64
 }
 
 type TerminalService struct {
@@ -70,48 +70,6 @@ func (ts *TerminalService) event(name string, value interface{}) {
 	} else if ts.ctx != nil {
 		runtime.EventsEmit(ts.ctx, name, value)
 	}
-}
-func executable(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0111 != 0 && filepath.IsAbs(path)
-}
-func shellArgs(path string) []string {
-	switch filepath.Base(path) {
-	case "bash", "zsh", "fish", "ksh", "dash", "sh":
-		return []string{"-l"}
-	default:
-		return nil
-	}
-}
-func detectShell() (string, []string) {
-	for _, path := range []string{os.Getenv("SHELL"), "/bin/bash", "/bin/sh"} {
-		if executable(path) {
-			return path, shellArgs(path)
-		}
-	}
-	return "/bin/sh", nil
-}
-func (ts *TerminalService) ListShells() []string {
-	preferred, _ := detectShell()
-	shells := []string{preferred}
-	if data, err := os.ReadFile("/etc/shells"); err == nil {
-		for _, line := range strings.Split(string(data), "\n") {
-			path := strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
-			if !executable(path) {
-				continue
-			}
-			found := false
-			for _, existing := range shells {
-				if existing == path {
-					found = true
-				}
-			}
-			if !found {
-				shells = append(shells, path)
-			}
-		}
-	}
-	return shells
 }
 func dimensions(cols, rows int) (int, int) {
 	if cols < 10 {
@@ -235,95 +193,6 @@ func (ts *TerminalService) session(id string) *TerminalSession {
 	return ts.sessions[id]
 }
 
-// One chunk is in flight at a time. xterm acknowledges only after consuming it,
-// so a slow renderer applies backpressure all the way to the child process.
-func (ts *TerminalService) readLoop(s *TerminalSession) {
-	defer close(s.done)
-	defer func() {
-		ts.killSessionInternal(s)
-		<-s.waitDone
-		s.mu.Lock()
-		if s.logFile != nil {
-			_ = s.logFile.Close()
-			s.logFile = nil
-		}
-		s.mu.Unlock()
-		ts.mu.Lock()
-		if ts.sessions[s.ID] == s {
-			delete(ts.sessions, s.ID)
-		}
-		ts.mu.Unlock()
-	}()
-	buf := make([]byte, outputChunkSize)
-	for {
-		n, err := s.ptyFile.Read(buf)
-		if n > 0 {
-			logError := ""
-			s.mu.Lock()
-			if s.logFile != nil {
-				if _, logErr := s.logFile.Write(buf[:n]); logErr != nil {
-					_ = s.logFile.Close()
-					s.logFile = nil
-					logError = logErr.Error()
-				}
-			}
-			s.sequence++
-			seq := s.sequence
-			s.mu.Unlock()
-			if logError != "" {
-				ts.event("terminal:log-error:"+s.ID, logError)
-			}
-			ts.event("terminal:data:"+s.ID, TerminalOutput{Sequence: seq, Data: base64.StdEncoding.EncodeToString(buf[:n])})
-			if ts.ctx != nil || ts.emit != nil {
-				for {
-					select {
-					case ack := <-s.ack:
-						if ack == seq {
-							goto consumed
-						}
-					case <-s.stop:
-						return
-					}
-				}
-			}
-		}
-	consumed:
-		if err != nil {
-			break
-		}
-	}
-	// A closed slave can precede process exit. Ensure it cannot keep a session alive.
-	select {
-	case <-s.waitDone:
-	case <-time.After(200 * time.Millisecond):
-		ts.killSessionInternal(s)
-		<-s.waitDone
-	}
-	select {
-	case <-s.stop:
-		return
-	default:
-	}
-	ts.event("terminal:exit:"+s.ID, TerminalExit{Code: s.exitCode})
-}
-func (ts *TerminalService) AcknowledgeOutput(id string, sequence uint64) {
-	s := ts.session(id)
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	valid := sequence == s.sequence && sequence > s.acknowledged
-	if valid {
-		s.acknowledged = sequence
-	}
-	s.mu.Unlock()
-	if valid {
-		select {
-		case s.ack <- sequence:
-		default:
-		}
-	}
-}
 func (ts *TerminalService) WriteToTerminal(id, data string) error {
 	if len(data) > 1024*1024 {
 		return fmt.Errorf("write payload exceeds 1MB limit")
@@ -432,28 +301,74 @@ func (ts *TerminalService) LogSession(id, path string) error {
 		return fmt.Errorf("session not found")
 	}
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.closed {
+		s.mu.Unlock()
 		return fmt.Errorf("session closed")
 	}
 	if path == "" {
-		if s.logFile != nil {
-			err := s.logFile.Close()
-			s.logFile = nil
-			return err
+		s.logGeneration++
+		logger := s.logger
+		s.mu.Unlock()
+		if logger != nil {
+			logger.finish()
 		}
 		return nil
 	}
 	if !filepath.IsAbs(path) {
+		s.mu.Unlock()
 		return fmt.Errorf("choose an absolute log path")
 	}
+	if s.logOpening {
+		s.mu.Unlock()
+		return fmt.Errorf("a log file is already opening")
+	}
+	if s.logger != nil {
+		select {
+		case <-s.logger.done:
+		default:
+			s.mu.Unlock()
+			return fmt.Errorf("previous log is still active or finishing")
+		}
+	}
+	s.logOpening = true
+	generation := s.logGeneration
+	s.mu.Unlock()
+	// Opening a file may itself block on remote storage. Keep it outside the
+	// lifecycle mutex and discard a late result after stop/close.
 	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	s.mu.Lock()
+	s.logOpening = false
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
-	if s.logFile != nil {
-		_ = s.logFile.Close()
+	if s.closed || generation != s.logGeneration {
+		s.mu.Unlock()
+		go file.Close()
+		return fmt.Errorf("log start cancelled")
 	}
-	s.logFile = file
+	s.logger = newSessionLog(file, func(err error) { ts.event("terminal:log-error:"+id, err.Error()) })
+	s.mu.Unlock()
 	return nil
+}
+
+func (ts *TerminalService) finalizeSession(s *TerminalSession) {
+	defer close(s.done)
+	ts.killSessionInternal(s)
+	<-s.waitDone
+	s.mu.Lock()
+	logger := s.logger
+	s.mu.Unlock()
+	if logger != nil {
+		select {
+		case <-logger.finish():
+		case <-time.After(200 * time.Millisecond):
+			logger.abort(fmt.Errorf("logging stopped before pending writes completed"))
+		}
+	}
+	ts.mu.Lock()
+	if ts.sessions[s.ID] == s {
+		delete(ts.sessions, s.ID)
+	}
+	ts.mu.Unlock()
 }

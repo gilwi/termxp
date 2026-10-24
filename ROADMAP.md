@@ -35,3 +35,13 @@ Linux-first; prioritize reliable daily use. The original 14-feature backlog is i
 5. Add macOS native PTY/metrics validation, then a Windows ConPTY adapter before claiming support there.
 
 No calendar estimate is assigned to these follow-ups until their environments and acceptance criteria are established. See `docs/TESTING.md` for automated checks and remaining manual scenarios.
+
+## Recovery follow-up delivered
+
+- Unified persistence queue, failed-close retry, explicit recovery backups and protection of unsupported/corrupt settings.
+- Typed application contracts and Wails adapter, reconnectable output faults, and controller-owned logging.
+- Bounded asynchronous logging isolated from process cancellation, with launch/output/logging modules separated from lifecycle ownership.
+- Stable SSH profile IDs and migration, predictable edit/delete behavior, same-connection splits, current-directory inheritance and per-tab focus.
+- Configurable snippets/shortcuts through the action registry, plus failed-restore directory/shell recovery controls.
+
+See `docs/IMPROVEMENT_PLAN.md` for the implementation contract and validation scope.

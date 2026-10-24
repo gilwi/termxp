@@ -1,19 +1,20 @@
 package main
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
 	"math"
 	"os"
 	"path/filepath"
-	"regexp"
-	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 type SSHProfile struct {
+	ID       string `json:"id,omitempty"`
 	Name     string `json:"name"`
 	Host     string `json:"host"`
 	User     string `json:"user"`
@@ -24,31 +25,40 @@ type SSHProfile struct {
 
 // Workspace descriptors deliberately contain no runtime IDs or terminal output.
 type WorkspaceNode struct {
-	Type        string          `json:"type"`
-	Orientation string          `json:"orientation,omitempty"`
-	Children    []WorkspaceNode `json:"children,omitempty"`
-	Sizes       []float64       `json:"sizes,omitempty"`
-	Shell       string          `json:"shell,omitempty"`
-	Cwd         string          `json:"cwd,omitempty"`
-	SSH         *SSHProfile     `json:"ssh,omitempty"`
+	Type         string          `json:"type"`
+	Orientation  string          `json:"orientation,omitempty"`
+	Children     []WorkspaceNode `json:"children,omitempty"`
+	Sizes        []float64       `json:"sizes,omitempty"`
+	Shell        string          `json:"shell,omitempty"`
+	Cwd          string          `json:"cwd,omitempty"`
+	SSHProfileID string          `json:"sshProfileId,omitempty"`
+	SSH          *SSHProfile     `json:"ssh,omitempty"`
 }
 type WorkspaceTab struct {
 	Name string        `json:"name"`
 	Root WorkspaceNode `json:"root"`
 }
+type Snippet struct {
+	ID      string `json:"id"`
+	Label   string `json:"label"`
+	Command string `json:"command"`
+}
 type Config struct {
-	Version          int            `json:"version"`
-	Theme            string         `json:"theme"`
-	FontSize         int            `json:"fontSize"`
-	DefaultShell     string         `json:"defaultShell"`
-	CopyOnSelect     bool           `json:"copyOnSelect"`
-	RestoreWorkspace bool           `json:"restoreWorkspace"`
-	Workspace        []WorkspaceTab `json:"workspace"`
-	SSHProfiles      []SSHProfile   `json:"sshProfiles"`
+	Snippets         []Snippet         `json:"snippets"`
+	Shortcuts        map[string]string `json:"shortcuts"`
+	Version          int               `json:"version"`
+	Theme            string            `json:"theme"`
+	FontSize         int               `json:"fontSize"`
+	DefaultShell     string            `json:"defaultShell"`
+	CopyOnSelect     bool              `json:"copyOnSelect"`
+	RestoreWorkspace bool              `json:"restoreWorkspace"`
+	Workspace        []WorkspaceTab    `json:"workspace"`
+	SSHProfiles      []SSHProfile      `json:"sshProfiles"`
 }
 type ConfigResult struct {
-	Config  Config `json:"config"`
-	Warning string `json:"warning"`
+	Config           Config `json:"config"`
+	Warning          string `json:"warning"`
+	RecoveryRequired bool   `json:"recoveryRequired"`
 }
 type ConfigService struct {
 	mu   sync.Mutex
@@ -57,7 +67,7 @@ type ConfigService struct {
 
 func NewConfigService() *ConfigService { return &ConfigService{} }
 func defaultConfig() Config {
-	return Config{Version: 1, Theme: "glassmorphic", FontSize: 14, RestoreWorkspace: true, Workspace: []WorkspaceTab{}, SSHProfiles: []SSHProfile{}}
+	return Config{Snippets: defaultSnippets(), Shortcuts: defaultShortcuts(), Version: 1, Theme: "glassmorphic", FontSize: 14, RestoreWorkspace: true, Workspace: []WorkspaceTab{}, SSHProfiles: []SSHProfile{}}
 }
 func (s *ConfigService) configPath() (string, error) {
 	if s.path != "" {
@@ -68,47 +78,6 @@ func (s *ConfigService) configPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, "termxp", "config.json"), nil
-}
-func validateSSH(p SSHProfile) error {
-	if strings.TrimSpace(p.Name) == "" || len(p.Name) > 128 {
-		return fmt.Errorf("SSH profile requires a name (up to 128 characters)")
-	}
-	valid := func(s string) bool {
-		return s != "" && !strings.HasPrefix(s, "-") && !strings.ContainsAny(s, " \t\r\n\x00")
-	}
-	if !valid(p.Host) || !regexp.MustCompile(`^[a-zA-Z0-9_.:\[\]-]+$`).MatchString(p.Host) {
-		return fmt.Errorf("invalid SSH host")
-	}
-	if p.User != "" && (!valid(p.User) || !regexp.MustCompile(`^[a-zA-Z0-9_.-]+$`).MatchString(p.User)) {
-		return fmt.Errorf("invalid SSH user")
-	}
-	if p.Port < 0 || p.Port > 65535 {
-		return fmt.Errorf("invalid SSH port")
-	}
-	if p.KeyPath != "" && !filepath.IsAbs(p.KeyPath) {
-		return fmt.Errorf("SSH key path must be absolute")
-	}
-	if p.JumpHost != "" && (!valid(p.JumpHost) || !regexp.MustCompile(`^[a-zA-Z0-9_.:@,\[\]-]+$`).MatchString(p.JumpHost)) {
-		return fmt.Errorf("invalid SSH jump host")
-	}
-	return nil
-}
-func sshArgs(p SSHProfile) []string {
-	// No shell interpolation. Separate option values prevent host/user option injection.
-	args := []string{}
-	if p.Port != 0 {
-		args = append(args, "-p", strconv.Itoa(p.Port))
-	}
-	if p.User != "" {
-		args = append(args, "-l", p.User)
-	}
-	if p.KeyPath != "" {
-		args = append(args, "-i", p.KeyPath)
-	}
-	if p.JumpHost != "" {
-		args = append(args, "-J", p.JumpHost)
-	}
-	return append(args, "--", p.Host)
 }
 func validateConfig(c Config) error {
 	if c.Version != 1 {
@@ -129,6 +98,27 @@ func validateConfig(c Config) error {
 		return fmt.Errorf("configuration limit exceeded")
 	}
 	names := map[string]bool{}
+	ids := map[string]bool{}
+	if len(c.Snippets) > 100 || len(c.Shortcuts) > 32 {
+		return fmt.Errorf("too many snippets or shortcuts")
+	}
+	for _, snippet := range c.Snippets {
+		if snippet.ID == "" || ids[snippet.ID] || strings.TrimSpace(snippet.Label) == "" || len(snippet.Label) > 128 || len(snippet.Command) > 65536 {
+			return fmt.Errorf("invalid or duplicate snippet")
+		}
+		ids[snippet.ID] = true
+	}
+	seenKeys := map[string]bool{}
+	for action, key := range c.Shortcuts {
+		if _, ok := defaultShortcuts()[action]; !ok {
+			return fmt.Errorf("unknown shortcut action: %s", action)
+		}
+		if !validShortcut(key) || (key != "" && seenKeys[key]) {
+			return fmt.Errorf("invalid or duplicate shortcut: %s", key)
+		}
+		seenKeys[key] = true
+	}
+	ids = map[string]bool{}
 	for _, p := range c.SSHProfiles {
 		if err := validateSSH(p); err != nil {
 			return err
@@ -137,6 +127,10 @@ func validateConfig(c Config) error {
 			return fmt.Errorf("duplicate SSH profile name")
 		}
 		names[p.Name] = true
+		if p.ID == "" || len(p.ID) > 128 || ids[p.ID] {
+			return fmt.Errorf("invalid or duplicate SSH profile ID")
+		}
+		ids[p.ID] = true
 	}
 	count := 0
 	var validateNode func(WorkspaceNode, int) error
@@ -196,43 +190,145 @@ func validateConfig(c Config) error {
 	}
 	return nil
 }
-func (s *ConfigService) LoadConfig() ConfigResult {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	fallback := func(err error) ConfigResult { return ConfigResult{Config: defaultConfig(), Warning: err.Error()} }
+func normalizeConfig(c *Config) {
+	if c.Snippets == nil {
+		c.Snippets = defaultSnippets()
+	}
+	if c.Shortcuts == nil {
+		c.Shortcuts = defaultShortcuts()
+	}
+	if c.Workspace == nil {
+		c.Workspace = []WorkspaceTab{}
+	}
+	if c.SSHProfiles == nil {
+		c.SSHProfiles = []SSHProfile{}
+	}
+	legacyProfiles := false
+	for i := range c.SSHProfiles {
+		p := &c.SSHProfiles[i]
+		if p.ID == "" {
+			legacyProfiles = true
+			p.ID = fmt.Sprintf("legacy-%x", sha256.Sum256([]byte(p.Name)))
+		}
+	}
+	var link func(*WorkspaceNode)
+	link = func(n *WorkspaceNode) {
+		if legacyProfiles && n.SSH != nil && n.SSHProfileID == "" {
+			for _, p := range c.SSHProfiles {
+				if p.Name == n.SSH.Name && p.Host == n.SSH.Host && p.User == n.SSH.User && p.Port == n.SSH.Port && p.KeyPath == n.SSH.KeyPath && p.JumpHost == n.SSH.JumpHost {
+					n.SSHProfileID = p.ID
+					n.SSH.ID = p.ID
+					break
+				}
+			}
+		}
+		for i := range n.Children {
+			link(&n.Children[i])
+		}
+	}
+	for i := range c.Workspace {
+		link(&c.Workspace[i].Root)
+	}
+}
+func (s *ConfigService) readConfigLocked() (Config, error) {
 	path, err := s.configPath()
 	if err != nil {
-		return fallback(err)
+		return Config{}, err
 	}
 	file, err := os.Open(path)
 	if os.IsNotExist(err) {
-		return ConfigResult{Config: defaultConfig()}
+		return defaultConfig(), nil
 	}
 	if err != nil {
-		return fallback(err)
+		return Config{}, err
 	}
 	defer file.Close()
+	info, err := file.Stat()
+	if err != nil {
+		return Config{}, err
+	}
+	if info.Size() > 1024*1024 {
+		return Config{}, fmt.Errorf("configuration exceeds 1MB")
+	}
 	var config Config
 	decoder := json.NewDecoder(io.LimitReader(file, 1024*1024+1))
 	if err := decoder.Decode(&config); err != nil {
-		return fallback(fmt.Errorf("configuration could not be read: %w", err))
+		return Config{}, fmt.Errorf("configuration could not be read: %w", err)
 	}
 	var extra interface{}
 	if err := decoder.Decode(&extra); err != io.EOF {
-		return fallback(fmt.Errorf("configuration contains trailing data"))
+		return Config{}, fmt.Errorf("configuration contains trailing data")
 	}
+	normalizeConfig(&config)
 	if err := validateConfig(config); err != nil {
-		return fallback(err)
+		return Config{}, err
 	}
-	if config.Workspace == nil {
-		config.Workspace = []WorkspaceTab{}
-	}
-	if config.SSHProfiles == nil {
-		config.SSHProfiles = []SSHProfile{}
+	return config, nil
+}
+func (s *ConfigService) LoadConfig() ConfigResult {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	config, err := s.readConfigLocked()
+	if err != nil {
+		return ConfigResult{Config: defaultConfig(), Warning: err.Error(), RecoveryRequired: true}
 	}
 	return ConfigResult{Config: config}
 }
+
+// RecoverConfig explicitly preserves the original bytes before saving defaults
+// or recovered preferences. Autosave cannot call this operation accidentally.
+func (s *ConfigService) RecoverConfig(config Config) (string, error) {
+	normalizeConfig(&config)
+	if err := validateConfig(config); err != nil {
+		return "", err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	path, err := s.configPath()
+	if err != nil {
+		return "", err
+	}
+	backup := ""
+	if _, err := os.Stat(path); err == nil {
+		original, err := os.Open(path)
+		if err != nil {
+			return "", err
+		}
+		defer original.Close()
+		file, err := os.CreateTemp(filepath.Dir(path), "config-recovery-"+time.Now().Format("20060102-150405")+"-*.json")
+		if err != nil {
+			return "", err
+		}
+		backup = file.Name()
+		if _, err := io.Copy(file, original); err != nil {
+			file.Close()
+			return "", err
+		}
+		if err := file.Sync(); err != nil {
+			file.Close()
+			return "", err
+		}
+		if err := file.Close(); err != nil {
+			return "", err
+		}
+	} else if !os.IsNotExist(err) {
+		return "", err
+	}
+	if err := s.saveConfigLocked(config); err != nil {
+		return backup, err
+	}
+	return backup, nil
+}
 func (s *ConfigService) SaveConfig(config Config) error {
+	normalizeConfig(&config)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, err := s.readConfigLocked(); err != nil {
+		return fmt.Errorf("configuration recovery is required before saving: %w", err)
+	}
+	return s.saveConfigLocked(config)
+}
+func (s *ConfigService) saveConfigLocked(config Config) error {
 	if err := validateConfig(config); err != nil {
 		return err
 	}
@@ -243,8 +339,6 @@ func (s *ConfigService) SaveConfig(config Config) error {
 	if len(data) > 1024*1024 {
 		return fmt.Errorf("configuration exceeds 1MB")
 	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	path, err := s.configPath()
 	if err != nil {
 		return err

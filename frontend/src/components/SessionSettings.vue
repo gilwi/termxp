@@ -1,11 +1,15 @@
 <script setup lang="ts">
 import { reactive, ref } from "vue";
 import { store } from "../utils/store";
-import { main } from "../../wailsjs/go/models";
-import { SaveConfig } from "../../wailsjs/go/main/ConfigService";
-import { snapshotConfig } from "../utils/settings";
+import type { SSHProfile } from "../utils/domain";
+import {
+  saveSSHProfile,
+  deleteSSHProfile,
+  persistence,
+} from "../utils/settings";
 const editing = ref(false),
-  oldName = ref(""),
+  oldId = ref(""),
+  saving = ref(false),
   error = ref("");
 const empty = () => ({
   name: "",
@@ -16,21 +20,31 @@ const empty = () => ({
   jumpHost: "",
 });
 const profile = reactive(empty());
-function edit(p?: main.SSHProfile) {
+function edit(p?: SSHProfile) {
   Object.assign(profile, p || empty());
-  oldName.value = p?.name || "";
+  oldId.value = p?.id || "";
   editing.value = true;
   error.value = "";
 }
 async function save() {
-  const next = store.sshProfiles.filter((p) => p.name !== oldName.value);
-  next.push(new main.SSHProfile({ ...profile, port: Number(profile.port) }));
-  const config = snapshotConfig();
-  config.sshProfiles = next;
+  if (saving.value) return;
+  saving.value = true;
   try {
-    await SaveConfig(config);
-    store.sshProfiles = next;
+    await saveSSHProfile({
+      ...profile,
+      id: oldId.value || undefined,
+      port: Number(profile.port),
+    });
     editing.value = false;
+  } catch (err) {
+    error.value = String(err);
+  } finally {
+    saving.value = false;
+  }
+}
+async function remove(id: string) {
+  try {
+    await deleteSSHProfile(id);
   } catch (err) {
     error.value = String(err);
   }
@@ -67,7 +81,7 @@ async function save() {
   </section>
   <section class="section session-settings">
     <h3>SSH profiles</h3>
-    <div v-for="p in store.sshProfiles" :key="p.name" class="profile-row">
+    <div v-for="p in store.sshProfiles" :key="p.id" class="profile-row">
       <button
         @click="store.addTab(p)"
         :title="`${p.user ? p.user + '@' : ''}${p.host}`"
@@ -75,17 +89,13 @@ async function save() {
         {{ p.name }}
       </button>
       <button @click="edit(p)" :aria-label="`Edit ${p.name}`">Edit</button>
-      <button
-        @click="
-          store.sshProfiles = store.sshProfiles.filter(
-            (item) => item.name !== p.name,
-          )
-        "
-        :aria-label="`Delete ${p.name}`"
-      >
-        ×
-      </button>
+      <button @click="remove(p.id!)" :aria-label="`Delete ${p.name}`">×</button>
     </div>
+    <p class="profile-note">
+      Edits apply to future connections and reconnects. Deleting a profile keeps
+      a connection copy in existing panes.
+    </p>
+    <p v-if="error && !editing" role="alert">{{ error }}</p>
     <button v-if="!editing" @click="edit()">Add SSH profile</button>
     <form v-if="editing" @submit.prevent="save">
       <label

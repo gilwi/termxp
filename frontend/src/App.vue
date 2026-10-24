@@ -2,19 +2,22 @@
 import { ref, onMounted, onBeforeUnmount, computed, nextTick } from "vue";
 import TerminalLayout from "./components/TerminalLayout.vue";
 import CustomTitleBar from "./components/CustomTitleBar.vue";
-import { GetSystemStats } from "../wailsjs/go/main/App";
+import { applicationBridge } from "./utils/bridge";
+const {stats:GetSystemStats,confirmClose:ConfirmClose}=applicationBridge;
 import {
     EventsOn,
     WindowIsMaximised,
 } from "../wailsjs/runtime/runtime";
 import CommandPalette from "./components/CommandPalette.vue";
 import SessionSettings from "./components/SessionSettings.vue";
-import { initializeSettings } from "./utils/settings";
+import ActionPreferences from "./components/ActionPreferences.vue";
+import { shortcutAction } from "./utils/shortcuts";
+import { initializeSettings, recoverSettings } from "./utils/settings";
 import { sessions } from "./utils/sessions";
-import { snippets } from "./utils/actions";
+import { actions } from "./utils/actions";
 import { terminals } from "./utils/layout";
 import type { Tab } from "./utils/store";
-import { ConfirmClose } from "../wailsjs/go/main/App";
+
 import { store, themes } from "./utils/store";
 
 const broadcastTargets = computed(() => {
@@ -22,6 +25,9 @@ const broadcastTargets = computed(() => {
     if (!tab) return "None";
     return terminals(tab.rootNode).filter(n => sessions.get(n.id)?.controller.state.status === "running").map(n => n.ssh?.name || sessions.get(n.id)?.controller.state.cwd || n.id.slice(0, 8)).join(", ") || "None";
 });
+const closingFailed=ref(false);
+async function recover(){try{await recoverSettings()}catch(err){store.notice=String(err)}}
+async function retryClose(){try{await settings?.flush();await ConfirmClose()}catch(err){store.notice=String(err);closingFailed.value=true;closing=false}}
 const isMaximised = ref<boolean>(false);
 const renameInputRef = ref<HTMLInputElement[]>([]);
 
@@ -40,40 +46,11 @@ let statsInterval: number | null = null;
 // Global Keyboard Shortcuts
 function handleGlobalKeyDown(e: KeyboardEvent) {
     if (store.paletteOpen || !store.ready) return;
-    if (e.ctrlKey && e.key.toLowerCase() === "p") { e.preventDefault(); store.paletteOpen = true; return; }
-    if (e.ctrlKey && e.key.toLowerCase() === "f") { e.preventDefault(); const c = sessions.get(store.activePaneId)?.controller; if (c) c.state.searchOpen = true; return; }
-
-    // Ctrl+Shift+T: New Tab
-    if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "t") {
-        e.preventDefault();
-        store.addTab();
-    }
-    // Ctrl+Shift+W: Close Current Tab
-    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "w") {
-        if (store.activeTabId) {
-            e.preventDefault();
-            store.closeTab(store.activeTabId);
-        }
-    }
-    // Ctrl+Shift+X: Toggle Maximize Pane
-    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "x") {
-        e.preventDefault();
-        store.toggleMaximize();
-    }
-    // Ctrl+Shift+E: Split Vertically (Right)
-    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "e") {
-        if (store.activePaneId) {
-            e.preventDefault();
-            store.splitPane(store.activePaneId, "vertical");
-        }
-    }
-    // Ctrl+Shift+O: Split Horizontally (Bottom)
-    else if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "o") {
-        if (store.activePaneId) {
-            e.preventDefault();
-            store.splitPane(store.activePaneId, "horizontal");
-        }
-    }
+    const action=shortcutAction(e,store.shortcuts);
+    if(!action)return;
+    e.preventDefault();
+    if(action==="palette")store.paletteOpen=true;
+    else actions().find(item=>item.id===action)?.run();
 }
 
 async function fetchStats() {
@@ -90,7 +67,7 @@ async function fetchStats() {
     }
 }
 
-let flushSettings: (() => Promise<void>) | undefined;
+let settings: Awaited<ReturnType<typeof initializeSettings>> | undefined;
 let disposed = false;
 let closing = false;
 const subscriptions: (() => void)[] = [];
@@ -98,11 +75,11 @@ onMounted(async () => {
     subscriptions.push(EventsOn("app:closing", async () => {
         if (closing) return;
         closing = true;
-        try { await flushSettings?.(); await ConfirmClose(); }
-        catch (err) { store.notice = `Could not close: ${String(err)}`; closing = false; }
+        try { await settings?.flush(); await ConfirmClose(); }
+        catch (err) { store.notice = `Could not close: ${String(err)}`; closing = false; closingFailed.value=true; }
     }));
-    flushSettings = await initializeSettings();
-    if (disposed) { await flushSettings(); return; }
+    settings = await initializeSettings();
+    if (disposed) { settings.dispose(); return; }
     fetchStats();
     statsInterval = window.setInterval(fetchStats, 2500);
     window.addEventListener("keydown", handleGlobalKeyDown);
@@ -133,7 +110,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
     disposed = true;
     subscriptions.forEach(off => off());
-    void flushSettings?.();
+    settings?.dispose();
     if (statsInterval) {
         clearInterval(statsInterval);
     }
@@ -266,18 +243,19 @@ onBeforeUnmount(() => {
                     </section>
 
                     <SessionSettings />
+                    <ActionPreferences />
 
                     <!-- Quick actions / commands -->
                     <section class="section">
                         <h3>Quick Actions</h3>
                         <div class="snippets-list">
                             <button
-                                v-for="s in snippets"
-                                :key="s.label"
+                                v-for="s in store.snippets"
+                                :key="s.id"
                                 class="snippet-btn"
-                                @click="store.runSnippet(s.cmd)"
+                                @click="store.runSnippet(s.command)"
                                 :disabled="!store.getActiveSessionId()"
-                                :title="s.cmd"
+                                :title="s.command"
                             >
                                 <span class="cmd-symbol">$</span>
                                 <span class="cmd-label">{{ s.label }}</span>
@@ -386,10 +364,12 @@ onBeforeUnmount(() => {
                     </div>
                 </header>
 
+                <div v-if="store.recoveryRequired" class="workspace-notice" role="alert">Original settings are protected. <button @click="recover">Back up original and save recovered settings</button></div>
+                <div v-if="closingFailed" class="workspace-notice" role="alert">Settings could not be saved. <button @click="retryClose">Retry save and close</button><button @click="ConfirmClose">Close without saving</button></div>
                 <div v-if="store.notice" class="workspace-notice" role="alert">{{ store.notice }} <button @click="store.notice = ''">Dismiss</button></div>
                 <div v-if="store.ready" class="workspace-tools">
                     <label>Shell <select v-model="store.defaultShell" aria-label="Shell for new tabs"><option value="">System default</option><option v-for="shell in store.shells" :key="shell" :value="shell">{{ shell }}</option></select></label>
-                    <button @click="store.paletteOpen = true">Commands (Ctrl+P)</button>
+                    <button @click="store.paletteOpen = true">Commands ({{ store.shortcuts.palette || "unassigned" }})</button>
                     <button :aria-pressed="store.broadcast" @click="store.broadcast = !store.broadcast">{{ store.broadcast ? 'Stop broadcast' : 'Broadcast input' }}</button>
                     <span v-if="store.broadcast" role="status">Typing and paste go to all running panes in this tab: {{ broadcastTargets }}</span>
                 </div>

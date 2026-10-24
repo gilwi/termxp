@@ -5,7 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import { acquireSession } from "../utils/sessions";
 import type { TerminalNode } from "../utils/layout";
 import { store } from "../utils/store";
-import { LogSession } from "../../wailsjs/go/main/TerminalService";
+
 const props = defineProps<{
   node: TerminalNode;
   theme: ITheme;
@@ -15,6 +15,12 @@ const props = defineProps<{
 const host = ref<HTMLDivElement | null>(null);
 const searchInput = ref<HTMLInputElement | null>(null);
 const query = ref("");
+const retryDirectory = ref(props.node.cwd);
+function reconnect() {
+  if (state.status === "failed")
+    view.controller.useDirectory(retryDirectory.value);
+  void view.controller.start();
+}
 const searchResult = ref("");
 const logOpen = ref(false),
   logPath = ref("");
@@ -53,7 +59,7 @@ function search(backwards = false) {
   searchResult.value = found ? "Match found" : "No matches";
 }
 function closeSearch() {
-  state.searchOpen = false;
+  view.controller.toggleSearch(false);
   view.search.clearDecorations();
   view.term.focus();
 }
@@ -68,11 +74,8 @@ function wheel(event: WheelEvent) {
 }
 async function logging() {
   try {
-    await LogSession(
-      view.controller.sessionId,
-      state.logging ? "" : logPath.value,
-    );
-    state.logging = !state.logging;
+    if (state.logging) await view.controller.stopLogging();
+    else await view.controller.startLogging(logPath.value);
     logOpen.value = false;
   } catch (err) {
     view.controller.report(err);
@@ -88,6 +91,7 @@ onMounted(() => {
   view.term.options.theme = props.theme;
   view.term.options.fontSize = props.fontSize;
   view.copyOnSelect = store.copyOnSelect;
+  view.shortcuts = store.shortcuts;
   fit();
   void view.controller.start();
   observer = new ResizeObserver(fit);
@@ -98,6 +102,13 @@ onMounted(() => {
   });
   if (props.active) view.term.focus();
 });
+watch(
+  () => state.status,
+  (status) => {
+    if (status === "failed") retryDirectory.value = state.cwd;
+  },
+  { immediate: true },
+);
 watch(
   () => props.theme,
   (theme) => {
@@ -117,6 +128,13 @@ watch(
   (enabled) => {
     view.copyOnSelect = enabled;
   },
+);
+watch(
+  () => store.shortcuts,
+  (keys) => {
+    view.shortcuts = keys;
+  },
+  { deep: true },
 );
 watch(
   () => props.active,
@@ -167,13 +185,31 @@ onBeforeUnmount(() => {
       <span>{{
         state.status === "exited"
           ? `Shell exited (${state.code})`
-          : "Shell could not start"
+          : "Terminal failed"
       }}</span>
-      <button @click="view.controller.start()">Reconnect</button>
+      <label v-if="state.status === 'failed'"
+        >Start directory
+        <input v-model="retryDirectory" placeholder="/absolute/path"
+      /></label>
+      <button @click="reconnect">Reconnect</button>
+      <button
+        v-if="state.status === 'failed' && !node.ssh"
+        @click="
+          view.controller.useShell('');
+          reconnect();
+        "
+      >
+        Use system default shell
+      </button>
     </div>
     <div v-if="state.error" class="terminal-tools terminal-error" role="alert">
       {{ state.error }}
-      <button @click="state.error = ''" aria-label="Dismiss error">×</button>
+      <button
+        @click="view.controller.dismissError()"
+        aria-label="Dismiss error"
+      >
+        ×
+      </button>
     </div>
     <div class="terminal-host" ref="host"></div>
     <div
@@ -183,7 +219,7 @@ onBeforeUnmount(() => {
       <span class="cwd-label" :title="state.cwd">{{
         state.cwd || node.ssh?.host || "Shell"
       }}</span>
-      <button @click="state.searchOpen = !state.searchOpen">Search</button>
+      <button @click="view.controller.toggleSearch()">Search</button>
       <button @click="state.logging ? logging() : (logOpen = !logOpen)">
         {{ state.logging ? "Stop logging" : "Log…" }}
       </button>

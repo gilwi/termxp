@@ -27,3 +27,13 @@ Linux working directories are polled from `/proc/<shell-pid>/cwd` every two seco
 ## Trust boundary and builds
 
 The Wails bridge has the user's shell privileges. Shell output is rendered through xterm, never HTML. Production CSP disallows external scripts, frames, objects, and form submissions. Inline styles remain allowed for Vue/xterm positioning. Development serves on loopback with Vite CORS disabled; Wails 2.17.0 checks IPC host/origin and authorization. Generated bindings are regenerated with the pinned CLI. Frontend and Go output-event changes must ship together.
+
+## Recovery follow-up
+
+Application contracts live in `frontend/src/utils/domain.ts`; generated models and Go calls are adapted in `bridge.ts`. SessionController receives a typed event bridge. Protocol failures become reconnectable failures, and acknowledgement RPCs time out after five seconds. Each new session gets a fresh input queue so a stuck old write cannot block reconnect; input limits count UTF-8 bytes. Logging start/stop belongs to the controller, including late-response/error ordering.
+
+`PersistenceCoordinator` is the single write queue for autosave, profile/preference edits and final save. It snapshots when an operation executes and propagates errors; explicit edits have scoped rollback. A failed final save keeps the window open for retry or explicit close without saving. Shell discovery failures no longer prevent loading otherwise valid settings.
+
+ConfigService rejects normal saves when the existing file cannot be read or validated. `RecoverConfig` streams the original into a private recovery backup before replacing it. The UI disables automatic saves during recovery. Version 1 accepts additive snippet/shortcut preferences and stable profile IDs, migrating older files in memory. Profile edits update future reconnect descriptors, and deletion detaches existing panes without changing running SSH processes.
+
+Go launch policy lives in `launch.go`, streaming in `terminal_output.go`, logging in `session_log.go`, and lifecycle ownership/finalization in `terminal.go`. Logging queues at most 32 packets and never holds a session mutex during filesystem operations. Queue overflow stops logging with an error. Finalization drains for up to 200 ms; an uninterruptible filesystem write may outlive the logger cancellation, but terminal cancellation does not wait for it. A session cannot start another log while the previous sink is still finishing.

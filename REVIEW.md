@@ -19,3 +19,7 @@ Go race tests/vet, frontend tests/type checking/production build, Linux packagin
 Automated regression coverage includes duplicate starts, natural-exit descriptor closure, concurrent shutdown, blocked input, slow consumers, byte boundaries/final output, sustained 8 MiB output, config corruption/permissions, SSH argument construction, layout identity, late startup cancellation, retry, input order, and restore descriptors.
 
 Real SSH connections, long interactive desktop soak tests, distribution signing, and non-Linux platforms remain unvalidated. Process-group cleanup does not promise termination of intentionally detached processes. Production CSP is verified through the Linux native smoke path; other webviews need their own checks. Dependency scans are point-in-time evidence, not proof that the application is vulnerability-free.
+
+## Recovery follow-up
+
+The subsequent implementation addresses silent final-save failure, accidental overwrite of unsupported config, output faults without reconnect state, disk writes under session locks, stale split directories and inconsistent SSH split context. It introduces typed frontend contracts, a single persistence coordinator, explicit recovery backups, stable profile identities, bounded isolated logging and focused Go modules. Added tests cover failure ordering, scoped rollback and stalled I/O; native smoke injects a final-save failure and verifies explicit config recovery. See the improvement plan and testing documentation for exact behavior and remaining environment-dependent checks.
