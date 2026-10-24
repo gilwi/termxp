@@ -4,4 +4,6 @@ import {main} from '../models';
 
 export function LoadConfig():Promise<main.ConfigResult>;
 
+export function RecoverConfig(arg1:main.Config):Promise<string>;
+
 export function SaveConfig(arg1:main.Config):Promise<void>;

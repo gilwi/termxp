@@ -6,6 +6,10 @@ export function LoadConfig() {
   return window['go']['main']['ConfigService']['LoadConfig']();
 }
 
+export function RecoverConfig(arg1) {
+  return window['go']['main']['ConfigService']['RecoverConfig'](arg1);
+}
+
 export function SaveConfig(arg1) {
   return window['go']['main']['ConfigService']['SaveConfig'](arg1);
 }
