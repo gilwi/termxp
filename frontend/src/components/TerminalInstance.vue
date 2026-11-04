@@ -252,6 +252,7 @@ onBeforeUnmount(() => {
 }
 .terminal-tools {
   display: flex;
+    flex-shrink: 0;
   align-items: center;
   gap: 8px;
   padding: 5px 8px;
