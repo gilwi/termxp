@@ -143,43 +143,6 @@ onBeforeUnmount(() => {
                 </div>
 
                 <div class="sidebar-content custom-scrollbar">
-                    <!-- App Status metrics -->
-                    <section class="section">
-                        <h3>App Metrics</h3>
-                        <div class="metrics-grid">
-                            <div class="metric-card">
-                                <div class="metric-info">
-                                    <span>App CPU</span>
-                                    <span class="metric-value">{{ store.stats.cpu == null ? "Unavailable" : store.stats.cpu + "%" }}</span>
-                                </div>
-                                <div class="progress-bar-container">
-                                    <div
-                                        class="progress-bar cpu-bar"
-                                        :style="{ width: Math.min(100, store.stats.cpu || 0) + '%' }"
-                                    ></div>
-                                </div>
-                            </div>
-
-                            <div class="metric-card">
-                                <div class="metric-info">
-                                    <span>Go process RAM</span>
-                                    <span class="metric-value">{{ store.stats.memoryRaw }}</span>
-                                </div>
-                                <div class="progress-bar-container">
-                                    <div
-                                        class="progress-bar memory-bar"
-                                        :style="{ width: (store.stats.memory || 0) + '%' }"
-                                    ></div>
-                                </div>
-                            </div>
-
-                            <div class="metric-card single-metric">
-                                <span class="metric-label">Uptime:</span>
-                                <span class="metric-text font-mono">{{ store.stats.uptime }}</span>
-                            </div>
-                        </div>
-                    </section>
-
                     <!-- Predefined Themes -->
                     <section class="section">
                         <h3>Visual Themes</h3>
@@ -402,6 +365,20 @@ onBeforeUnmount(() => {
                 </div>
             </main>
         </div>
+        <footer class="metrics-bar" aria-label="App metrics">
+            <div class="metric-item">
+                <span class="metric-label">App CPU</span>
+                <span class="metric-value">{{ store.stats.cpu == null ? "Unavailable" : store.stats.cpu + "%" }}</span>
+            </div>
+            <div class="metric-item">
+                <span class="metric-label">Go process RAM</span>
+                <span class="metric-value">{{ store.stats.memoryRaw }}</span>
+            </div>
+            <div class="metric-item">
+                <span class="metric-label">Uptime</span>
+                <span class="metric-value">{{ store.stats.uptime }}</span>
+            </div>
+        </footer>
         <CommandPalette v-if="store.paletteOpen" />
     </div>
 </template>
@@ -440,7 +417,7 @@ onBeforeUnmount(() => {
     display: flex;
     flex: 1;
     width: 100%;
-    height: calc(100% - 32px); /* Title bar is 32px */
+    min-height: 0;
     overflow: hidden;
     position: relative;
 }
@@ -544,72 +521,39 @@ onBeforeUnmount(() => {
     color: var(--text-muted);
 }
 
-/* System metrics UI */
-.metrics-grid {
+/* Persistent app metrics */
+.metrics-bar {
     display: flex;
-    flex-direction: column;
-    gap: 12px;
-}
-
-.metric-card {
-    background: var(--card-bg);
-    border: 1px solid var(--border-color);
-    border-radius: 8px;
-    padding: 10px 12px;
-}
-
-.metric-info {
-    display: flex;
-    justify-content: space-between;
-    font-size: 12px;
-    margin-bottom: 6px;
-    color: var(--text-main);
-    font-weight: 500;
-}
-
-.metric-value {
-    font-family: var(--font-mono);
-}
-
-.progress-bar-container {
-    width: 100%;
-    height: 5px;
-    background: rgba(255, 255, 255, 0.05);
-    border-radius: 10px;
-    overflow: hidden;
-}
-
-.progress-bar {
-    height: 100%;
-    border-radius: 10px;
-    width: 0;
-    transition: width 0.8s cubic-bezier(0.1, 0.8, 0.2, 1);
-}
-
-.cpu-bar {
-    background: var(--active-accent);
-    box-shadow: 0 0 6px var(--active-accent-glow);
-}
-
-.memory-bar {
-    background: #3b82f6;
-    box-shadow: 0 0 6px rgba(59, 130, 246, 0.5);
-}
-
-.single-metric {
-    display: flex;
-    justify-content: space-between;
+    flex-wrap: wrap;
+    justify-content: flex-end;
     align-items: center;
-    font-size: 12px;
+    text-align: left;
+    gap: 4px 24px;
+    flex-shrink: 0;
+    min-height: 30px;
+    padding: 5px 12px;
+    box-sizing: border-box;
+    background: var(--header-bg);
+    border-top: 1px solid var(--border-color);
+    font-size: 11px;
+    line-height: 18px;
+}
+
+.metric-item {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 0 8px;
+    min-width: 0;
 }
 
 .metric-label {
     color: var(--text-muted);
 }
 
-.metric-text {
-    font-weight: 600;
-    color: var(--text-main);
+.metric-value {
+    font-family: var(--font-mono);
+    overflow-wrap: anywhere;
 }
 
 /* Visual Themes Selector */
@@ -736,7 +680,7 @@ onBeforeUnmount(() => {
 /* Workspace workspace */
 .workspace {
     flex: 1;
-    height: 100%;
+    min-height: 0;
     min-width: 0;
     display: flex;
     flex-direction: column;
@@ -889,6 +833,7 @@ onBeforeUnmount(() => {
 /* Terminal wrapper pane */
 .terminal-workspace-container {
     flex: 1;
+    min-height: 0;
     position: relative;
     overflow: hidden;
     background: rgba(0, 0, 0, 0.15);
