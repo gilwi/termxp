@@ -43,7 +43,7 @@ Output: `build/bin/termxp`. The CLI and Go module versions must match. Build hoo
 
 | Shortcut | Action |
 |---|---|
-| Ctrl+Shift+T / W | New tab / close tab |
+| Ctrl+Shift+T / W | New tab / close current pane |
 | Ctrl+Shift+E / O | Split right / below |
 | Ctrl+Shift+X | Toggle maximized pane |
 | Ctrl+Shift+C / V | Copy / terminal-aware paste |

@@ -132,6 +132,8 @@ export const store = reactive({
     if (this.maximizedPaneId === id) this.maximizedPaneId = null;
     if (this.activePaneId === id)
       this.activePaneId = terminals(root)[0]?.id || "";
+    if (tab.focusedPaneId === id)
+      tab.focusedPaneId = terminals(root)[0]?.id || "";
   },
   splitPane(
     id: string,

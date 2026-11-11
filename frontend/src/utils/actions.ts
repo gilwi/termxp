@@ -25,6 +25,11 @@ export function actions(): Action[] {
     { id: "new", label: "New shell tab", run: () => store.addTab() },
     {
       id: "close",
+      label: "Close current pane",
+      run: () => store.closePane(store.activePaneId),
+    },
+    {
+      id: "close-tab",
       label: "Close current tab",
       run: () => store.closeTab(store.activeTabId),
     },
