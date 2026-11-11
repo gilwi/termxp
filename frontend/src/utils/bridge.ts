@@ -2,7 +2,7 @@ import { main } from "../../wailsjs/go/models";
 import * as terminal from "../../wailsjs/go/main/TerminalService";
 import { GetSystemStats, ConfirmClose } from "../../wailsjs/go/main/App";
 import * as config from "../../wailsjs/go/main/ConfigService";
-import { EventsOn } from "../../wailsjs/runtime/runtime";
+import { ClipboardGetText, ClipboardSetText, EventsOn } from "../../wailsjs/runtime/runtime";
 import type {
   Config,
   ConfigResult,
@@ -45,4 +45,13 @@ export const terminalBridge: SessionBridge = {
 export const applicationBridge = {
   stats: GetSystemStats,
   confirmClose: ConfirmClose,
+};
+
+export const clipboardBridge = {
+  readText: async (): Promise<string> => ClipboardGetText(),
+  writeText: async (text: string): Promise<void> => {
+    if (!(await ClipboardSetText(text))) {
+      throw new Error("Native clipboard write was unsuccessful");
+    }
+  },
 };

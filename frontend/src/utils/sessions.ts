@@ -3,7 +3,7 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SearchAddon } from "@xterm/addon-search";
 import { shortcutAction } from "./shortcuts";
-import { terminalBridge } from "./bridge";
+import { clipboardBridge, terminalBridge } from "./bridge";
 import { SessionController } from "./sessionController";
 import type { TerminalNode } from "./layout";
 import type { ITheme } from "@xterm/xterm";
@@ -61,23 +61,28 @@ export function acquireSession(
     opened: false,
     shortcuts: {},
   };
+  async function copySelection(): Promise<void> {
+    const text = term.getSelection();
+    if (!text) return;
+    try {
+      await clipboardBridge.writeText(text);
+    } catch (err) {
+      controller.report(`Could not copy to clipboard: ${String(err)}`);
+    }
+  }
   term.attachCustomKeyEventHandler((e) => {
     const key = e.key.toLowerCase();
     if (e.ctrlKey && e.shiftKey && (key === "c" || key === "v")) {
       if (e.type === "keydown" && !e.repeat) {
         if (key === "c") {
-          const text = term.getSelection();
-          if (text)
-            void navigator.clipboard
-              .writeText(text)
-              .catch((err) => controller.report(err));
+          void copySelection();
         } else {
-          void navigator.clipboard
+          void clipboardBridge
             .readText()
             .then((text) => {
               if (controller.state.status === "running") term.paste(text);
             })
-            .catch((err) => controller.report(err));
+            .catch((err) => controller.report(`Could not paste from clipboard: ${String(err)}`));
         }
       }
       e.preventDefault();
@@ -88,9 +93,7 @@ export function acquireSession(
   });
   term.onSelectionChange(() => {
     if (view.copyOnSelect && term.hasSelection())
-      void navigator.clipboard
-        .writeText(term.getSelection())
-        .catch((err) => controller.report(err));
+      void copySelection();
   });
   sessions.set(node.id, view);
   return view;
