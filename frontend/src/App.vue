@@ -12,10 +12,9 @@ import {
 import CommandPalette from "./components/CommandPalette.vue";
 import SessionSettings from "./components/SessionSettings.vue";
 import ActionPreferences from "./components/ActionPreferences.vue";
-import { shortcutAction } from "./utils/shortcuts";
+import { handleGlobalKeyDown } from "./utils/globalShortcuts";
 import { initializeSettings, recoverSettings } from "./utils/settings";
 import { sessions } from "./utils/sessions";
-import { actions } from "./utils/actions";
 import { terminals } from "./utils/layout";
 import type { Tab } from "./utils/store";
 
@@ -43,16 +42,6 @@ function startRenameTab(tab: Tab) {
 
 // System stats poller
 let statsInterval: number | null = null;
-
-// Global Keyboard Shortcuts
-function handleGlobalKeyDown(e: KeyboardEvent) {
-    if (store.paletteOpen || !store.ready) return;
-    const action=shortcutAction(e,store.shortcuts);
-    if(!action)return;
-    e.preventDefault();
-    if(action==="palette")store.paletteOpen=true;
-    else actions().find(item=>item.id===action)?.run();
-}
 
 async function fetchStats() {
     try {

@@ -48,6 +48,22 @@ describe("actions and shortcuts", () => {
     expect(store.tabs).toHaveLength(0);
   });
 
+  it("closes the active pane after returning to an older split", () => {
+    store.addTab();
+    const olderPaneId = store.activePaneId;
+    store.splitPane(olderPaneId, "vertical");
+    const newestPaneId = store.activePaneId;
+    store.activePaneId = olderPaneId;
+
+    actions().find((a) => a.id === "close")?.run();
+
+    expect(terminals(store.tabs[0].rootNode).map((pane) => pane.id)).toEqual([
+      newestPaneId,
+    ]);
+    expect(disposeSession).toHaveBeenCalledExactlyOnceWith(olderPaneId);
+    expect(store.activePaneId).toBe(newestPaneId);
+  });
+
   it("close-tab action closes the entire tab including all panes", () => {
     store.addTab();
     store.splitPane(store.activePaneId, "vertical");

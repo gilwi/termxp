@@ -256,7 +256,10 @@ function onDrop(
     <div
         v-else
         :class="['terminal-pane', { active: activePaneId === node.id }]"
+        :data-pane-id="node.id"
         @click.capture="store.activePaneId = node.id"
+        @pointerdown.capture="store.activePaneId = node.id"
+        @focusin.capture="store.activePaneId = node.id"
         @contextmenu.prevent="showContextMenu"
         @dragenter="onPaneDragEnter"
         @dragover="onPaneDragOver"
